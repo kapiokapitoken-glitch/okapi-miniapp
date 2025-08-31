@@ -11,17 +11,21 @@
   <button id="connect">Phantom'a Bağlan</button>
 
   <script>
-    const tg = window.Telegram?.WebApp;
-    if (tg) tg.expand();
+  // Telegram WebApp objesi
+  const tg = window.Telegram?.WebApp;
+  if (tg) tg.expand();
 
-    async function connectPhantom() {
-      const payload = `okapi-connect:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+  // Şu anki miniapp URL’in (DO App Platform)
+  const APP_URL = "https://okapi-miniapp-7ex5j.ondigitalocean.app/";
 
-      if (!window.solana?.isPhantom) {
-        alert("Phantom yüklü değil. Lütfen Phantom Mobile ile açın.");
-        return;
-      }
+  // Phantom'da aynı sayfayı açan universal link
+  const PHANTOM_DEEPLINK = "https://phantom.app/ul/browse/" + encodeURIComponent(APP_URL);
+
+  async function connectPhantom() {
+    // Eğer Phantom provider mevcutsa direkt imza akışı
+    if (window.solana?.isPhantom) {
       try {
+        const payload = `okapi-connect:${Date.now()}:${Math.random().toString(36).slice(2)}`;
         const enc = new TextEncoder();
         const msg = enc.encode(payload);
         const resp = await window.solana.signMessage(msg, "utf8");
@@ -32,12 +36,20 @@
           signature: Array.from(resp.signature)
         };
         tg?.sendData?.(JSON.stringify(result));
+        tg?.close?.(); // mini app’i kapat (isteğe bağlı)
       } catch (e) {
         tg?.sendData?.(JSON.stringify({ type:"phantom_connect_error", error: String(e) }));
       }
+      return;
     }
 
-    document.getElementById('connect').addEventListener('click', connectPhantom);
-  </script>
+    // Telegram webview'da Phantom yoksa → Phantom uygulamasında aç
+    // Kullanıcıyı Phantom'a yönlendiriyoruz (aynı sayfa Phantom içinde açılacak)
+    window.location.href = PHANTOM_DEEPLINK;
+  }
+
+  document.getElementById('connect').addEventListener('click', connectPhantom);
+</script>
+
 </body>
 </html>
