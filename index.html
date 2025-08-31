@@ -26,7 +26,8 @@
 <canvas id="game"></canvas>
 
 <script>
-const tg = window.Telegram?.WebApp; tg?.expand?.();
+var tg = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
+try { if (tg && typeof tg.expand === 'function') tg.expand(); } catch (e) {}
 
 const cvs = document.getElementById("game");
 const ctx = cvs.getContext("2d");
@@ -165,12 +166,18 @@ function start(){
 function endGame(){
   over=true; running=false; best=Math.max(best,Math.floor(score));
   const hint=document.getElementById('hint'); hint.textContent=`💥 Oyun bitti! Skor: ${Math.floor(score)} • En iyi: ${best}\nTekrar oynamak için Başlat.`; hint.style.display="block";
-  tg?.sendData?.(JSON.stringify({ type:"runner_score", score: Math.floor(score) }));
+  try {
+  if (tg && typeof tg.sendData === 'function') {
+    tg.sendData(JSON.stringify({ type:"runner_score", score: Math.floor(score) }));
+  }
+} catch(e) {}
+
 }
 function tap(){ if(!running || over) start(); else kapi.flap(); }
 
 document.getElementById('btnStart').addEventListener('click', start);
-cvs.addEventListener('pointerdown', tap);
+var tapEvent = ('ontouchstart' in window) ? 'touchstart' : (window.PointerEvent ? 'pointerdown' : 'mousedown');
+cvs.addEventListener(tapEvent, tap, {passive:true});
 document.addEventListener('keydown', e=>{ if(e.code==='Space') tap(); });
 
 resetKapi(); requestAnimationFrame(loop);
