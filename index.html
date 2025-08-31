@@ -6,16 +6,16 @@
   <title>OKAPI Connect</title>
   <style>
     body { font-family: system-ui, Arial; padding: 20px; }
-    button, a.btn { display:inline-block; padding:12px 16px; border:0; border-radius:10px; text-decoration:none; }
+    button, a.btn { display:inline-block; padding:12px 16px; border:0; border-radius:10px; text-decoration:none; cursor:pointer; }
     #connect { background:#6c5ce7; color:#fff; }
     .ghost { background:#f1f2f6; color:#2f3542; }
     .row { margin-top:14px; }
-    .mono { font-family: ui-monospace, SFMono-Regular, monospace; }
+    .mono { font-family: ui-monospace, SFMono-Regular, monospace; white-space:pre-wrap; }
   </style>
 </head>
 <body>
   <h2>OKAPI — Phantom Connect</h2>
-  <p>Telegram WebApp üzerinden Phantom cüzdanını bağla.</p>
+  <p>Telegram Mini App üzerinden Phantom cüzdanını bağla.</p>
 
   <div id="step-telegram">
     <button id="connect">Phantom'a Bağlan</button>
@@ -23,77 +23,89 @@
   </div>
 
   <div id="step-phantom" style="display:none">
-    <p>Phantom içinde açıldı. <b>“Phantom'da İmzala”</b> butonuna dokun ve izinleri onayla.</p>
+    <p>Phantom içinde açıldı. <b>“Phantom'da İmzala”</b> butonuna dokun; önce bağlanma iznini ver, sonra imzayı onayla.</p>
     <button id="connectPhantom" class="ghost">Phantom'da İmzala</button>
     <div class="row"><a id="backToTelegram" class="btn" style="display:none">Telegram’a Dön ve Bağlantıyı Tamamla</a></div>
     <div class="row"><small class="mono" id="debug"></small></div>
   </div>
 
 <script>
-  // ---- BURAYI KENDİNE GÖRE DOLDUR ----
-  const BOT_USERNAME  = "Okapitoken_bot";   // örn: okapi_airdrop_bot   (@ YOK)
-  const APP_SHORTNAME = "okapi-miniapp";  // BotFather'da verdiğin mini app short name
-  const APP_URL       = "https://okapi-miniapp-7ex5j.ondigitalocean.app/";
-  // -------------------------------------
+  // ---- SİZE ÖZEL AYARLAR ----
+  const BOT_USERNAME  = "Okapitoken_bot";   // @ işareti YOK
+  const APP_SHORTNAME = "okapi-miniapp";    // BotFather Mini App short name
+  const APP_URL       = "https://okapi-miniapp-7ex5j.ondigitalocean.app/"; // DO App Platform URL
+  // ---------------------------
 
+  const VERSION = "v4"; // cache-busting
   const tg = window.Telegram?.WebApp; tg?.expand?.();
 
-  // Telegram webview'da Phantom yoksa Phantom uygulamasında açmak için deeplink
-  const PHANTOM_DEEPLINK = "https://phantom.app/ul/browse/" + encodeURIComponent(APP_URL + "?mode=phantom");
-
-  // Telegram’a geri dönüş linki (mini app'i startapp paramıyla tekrar açar)
-  function telegramReturnLink(payloadB64) {
-    return `https://t.me/${BOT_USERNAME}/${APP_SHORTNAME}?startapp=${encodeURIComponent(payloadB64)}`;
-  }
-
-  // Telegram’dan geri döndüysek (startapp paramı), veriyi bota gönder ve miniapp'i kapat
-  (function handleReturnFromPhantom() {
-    try {
-      const url = new URL(location.href);
-      const sp  = url.searchParams.get("tgWebAppStartParam");
-      if (sp && tg) {
-        const obj = JSON.parse(decodeURIComponent(escape(atob(sp))));
-        tg.sendData(JSON.stringify(obj));
-        tg.close?.();
-      }
-    } catch {}
-  })();
-
-  // UI elemanları
-  const enc = new TextEncoder();
   const statusEl = document.getElementById('status');
   const debugEl  = document.getElementById('debug');
   const backToTelegram = document.getElementById('backToTelegram');
   const stepTelegram = document.getElementById('step-telegram');
   const stepPhantom  = document.getElementById('step-phantom');
 
-  // Phantom ortamı mı? (deeplink ile geldiğimizde mode=phantom query’si var)
+  // Telegram webview'da Phantom yoksa: aynı sayfayı Phantom uygulamasında aç (mode=phantom & ver=…)
+  const PHANTOM_DEEPLINK =
+    "https://phantom.app/ul/browse/" + encodeURIComponent(APP_URL + "?mode=phantom&ver=" + VERSION);
+
+  function telegramReturnLink(payloadB64) {
+    // Mini App’i startapp paramıyla tekrar açar; açılınca tgWebAppStartParam ile bota sendData yapacağız
+    return `https://t.me/${BOT_USERNAME}/${APP_SHORTNAME}?startapp=${encodeURIComponent(payloadB64)}`;
+  }
+
+  function b64(obj){ return btoa(unescape(encodeURIComponent(JSON.stringify(obj)))); }
+  function fromB64(s){ try { return JSON.parse(decodeURIComponent(escape(atob(s)))); } catch { return null; } }
+  const enc = new TextEncoder();
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  // Telegram'a geri döndüysek (startapp paramı) → sendData & close
+  (function handleReturnFromPhantom() {
+    const sp = new URL(location.href).searchParams.get("tgWebAppStartParam");
+    if (sp && tg) {
+      const obj = fromB64(sp);
+      if (obj) {
+        tg.sendData(JSON.stringify(obj));
+        tg.close?.();
+      }
+    }
+  })();
+
+  // Phantom ortamı tespiti (deeplink ile geldiğimizde ?mode=phantom var)
   const isPhantomEnv = !!(window.solana?.isPhantom) || /mode=phantom/.test(location.search);
   if (isPhantomEnv) {
     stepTelegram.style.display = "none";
     stepPhantom.style.display  = "block";
   }
 
-  // 1) connect -> 2) signMessage
+  // 1) connect → 2) signMessage (önce utf8 dene, olmazsa parametresiz dene)
   async function connectThenSign() {
     try {
       if (!window.solana?.isPhantom) {
         statusEl && (statusEl.textContent = "Phantom'a yönlendiriliyor…");
-        // yeni sekmede açmak daha stabil olabiliyor
         window.open(PHANTOM_DEEPLINK, "_blank");
         return;
       }
 
-      // 1) CONNECT (ilk kez ise izin penceresi)
+      debugEl && (debugEl.textContent = "Phantom tespit edildi.");
+      // CONNECT
       if (!window.solana.isConnected) {
-        debugEl && (debugEl.textContent = "Cüzdana bağlanılıyor…");
+        debugEl && (debugEl.textContent += "\nCüzdana bağlanılıyor…");
         await window.solana.connect({ onlyIfTrusted: false });
+        await sleep(200); // provider hazır olsun
       }
+      debugEl && (debugEl.textContent += "\nBağlandı. İmza isteniyor…");
 
-      // 2) SIGN
       const payload = { t: Date.now(), n: Math.random().toString(36).slice(2) };
       const msg = enc.encode(`okapi-connect:${payload.t}:${payload.n}`);
-      const resp = await window.solana.signMessage(msg, "utf8");
+
+      let resp;
+      try {
+        resp = await window.solana.signMessage(msg, "utf8");
+      } catch(e1) {
+        // bazı istemciler ikinci parametreyle sorun çıkarır; parametresiz dene
+        resp = await window.solana.signMessage(msg);
+      }
 
       const result = {
         type: "phantom_connect",
@@ -102,29 +114,33 @@
         signature: Array.from(resp.signature)
       };
 
-      // Telegram içindeysek direkt gönder
       if (tg) {
+        // Telegram içindeyiz → direkt ver, kapat
         tg.sendData(JSON.stringify(result));
         tg.close?.();
-        return;
+      } else {
+        // Phantom içindeyiz → Telegram’a dönüş linki göster
+        const b64res = b64(result);
+        backToTelegram.href = telegramReturnLink(b64res);
+        backToTelegram.textContent = "Telegram’a Dön ve Bağlantıyı Tamamla";
+        backToTelegram.style.display = "inline-block";
+        debugEl && (debugEl.textContent += "\nİmza alındı. Telegram’a dönerek tamamlayın.");
       }
-
-      // Phantom içindeysek: geri dönüş butonu göster
-      const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(result))));
-      backToTelegram.href = telegramReturnLink(b64);
-      backToTelegram.textContent = "Telegram’a Dön ve Bağlantıyı Tamamla";
-      backToTelegram.style.display = "inline-block";
-      debugEl && (debugEl.textContent = "İmza alındı. Telegram’a dönerek tamamlayın.");
-
     } catch (e) {
       const err = String(e);
-      debugEl && (debugEl.textContent = "Hata: " + err);
+      debugEl && (debugEl.textContent += "\nHata: " + err);
       tg?.sendData?.(JSON.stringify({ type:"phantom_connect_error", error: err }));
     }
   }
 
+  // Telegram görünümü: Phantom'a taşır (veya varsa direkt connect+sign)
   document.getElementById('connect')?.addEventListener('click', connectThenSign);
+  // Phantom görünümü: otomatik başlat + butonla tekrar dene
   document.getElementById('connectPhantom')?.addEventListener('click', connectThenSign);
+  if (isPhantomEnv) {
+    // Phantom’da sayfa açıldığında otomatik akış
+    connectThenSign();
+  }
 </script>
 </body>
 </html>
