@@ -1,0 +1,43 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OKAPI Connect</title>
+</head>
+<body>
+  <h2>OKAPI — Phantom Connect</h2>
+  <p>Telegram WebApp üzerinden Phantom cüzdanını bağla.</p>
+  <button id="connect">Phantom'a Bağlan</button>
+
+  <script>
+    const tg = window.Telegram?.WebApp;
+    if (tg) tg.expand();
+
+    async function connectPhantom() {
+      const payload = `okapi-connect:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+
+      if (!window.solana?.isPhantom) {
+        alert("Phantom yüklü değil. Lütfen Phantom Mobile ile açın.");
+        return;
+      }
+      try {
+        const enc = new TextEncoder();
+        const msg = enc.encode(payload);
+        const resp = await window.solana.signMessage(msg, "utf8");
+        const result = {
+          type: "phantom_connect",
+          payload,
+          publicKey: resp.publicKey.toString(),
+          signature: Array.from(resp.signature)
+        };
+        tg?.sendData?.(JSON.stringify(result));
+      } catch (e) {
+        tg?.sendData?.(JSON.stringify({ type:"phantom_connect_error", error: String(e) }));
+      }
+    }
+
+    document.getElementById('connect').addEventListener('click', connectPhantom);
+  </script>
+</body>
+</html>
