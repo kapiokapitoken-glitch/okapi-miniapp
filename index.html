@@ -1,146 +1,350 @@
 <!doctype html>
 <html>
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>OKAPI Connect</title>
-  <style>
-    body { font-family: system-ui, Arial; padding: 20px; }
-    button, a.btn { display:inline-block; padding:12px 16px; border:0; border-radius:10px; text-decoration:none; cursor:pointer; }
-    #connect { background:#6c5ce7; color:#fff; }
-    .ghost { background:#f1f2f6; color:#2f3542; }
-    .row { margin-top:14px; }
-    .mono { font-family: ui-monospace, SFMono-Regular, monospace; white-space:pre-wrap; }
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+<title>Kapi Runner — Pixel</title>
+<style>
+  html,body{margin:0;padding:0;background:#0f1226;height:100%;overflow:hidden;font-family:system-ui,Arial}
+  #ui{position:fixed;left:0;right:0;top:0;display:flex;align-items:center;justify-content:space-between;padding:8px 12px;color:#fff;z-index:3}
+  #left{display:flex;gap:10px;align-items:center}
+  .pill{background:rgba(255,255,255,.12);border-radius:999px;padding:6px 10px}
+  #btnStart{background:#6c5ce7;border:0;color:#fff;padding:8px 12px;border-radius:10px}
+  #hint{position:fixed;left:50%;top:58%;transform:translate(-50%,-50%);color:#fff;opacity:.95;font-size:15px;text-align:center;z-index:2}
+  canvas{display:block;touch-action:none}
+</style>
 </head>
 <body>
-  <h2>OKAPI — Phantom Connect</h2>
-  <p>Telegram Mini App üzerinden Phantom cüzdanını bağla.</p>
-
-  <div id="step-telegram">
-    <button id="connect">Phantom'a Bağlan</button>
-    <div class="row"><small class="mono" id="status"></small></div>
+<div id="ui">
+  <div id="left">
+    <div class="pill">❤️ <span id="lives">3</span></div>
+    <div class="pill">⭐ <span id="score">0</span></div>
   </div>
-
-  <div id="step-phantom" style="display:none">
-    <p>Phantom içinde açıldı. <b>“Phantom'da İmzala”</b> butonuna dokun; önce bağlanma iznini ver, sonra imzayı onayla.</p>
-    <button id="connectPhantom" class="ghost">Phantom'da İmzala</button>
-    <div class="row"><a id="backToTelegram" class="btn" style="display:none">Telegram’a Dön ve Bağlantıyı Tamamla</a></div>
-    <div class="row"><small class="mono" id="debug"></small></div>
-  </div>
+  <button id="btnStart">Başlat</button>
+</div>
+<div id="hint">Dokun / Space: Zıpla ⬆️<br/>Engelleri aş, coin topla!</div>
+<canvas id="game"></canvas>
 
 <script>
-  // ---- SİZE ÖZEL AYARLAR ----
-  const BOT_USERNAME  = "Okapitoken_bot";   // @ işareti YOK
-  const APP_SHORTNAME = "okapi-miniapp";    // BotFather Mini App short name
-  const APP_URL       = "https://okapi-miniapp-7ex5j.ondigitalocean.app/"; // DO App Platform URL
-  // ---------------------------
+/* Telegram Mini App */
+const tg = window.Telegram?.WebApp; tg?.expand?.();
 
-  const VERSION = "v4"; // cache-busting
-  const tg = window.Telegram?.WebApp; tg?.expand?.();
+/* Boyutlandırma (retina) */
+const cvs = document.getElementById("game");
+const ctx = cvs.getContext("2d");
+function fit(){
+  const w = Math.min(window.innerWidth, 420);
+  const h = Math.min(window.innerHeight, 780);
+  const dpr = window.devicePixelRatio || 1;
+  cvs.style.width = w+"px"; cvs.style.height = h+"px";
+  cvs.width = Math.floor(w*dpr); cvs.height = Math.floor(h*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.imageSmoothingEnabled = false; // pixel-art netliği
+}
+fit(); addEventListener("resize", fit);
+const W = ()=>cvs.clientWidth, H = ()=>cvs.clientHeight;
 
-  const statusEl = document.getElementById('status');
-  const debugEl  = document.getElementById('debug');
-  const backToTelegram = document.getElementById('backToTelegram');
-  const stepTelegram = document.getElementById('step-telegram');
-  const stepPhantom  = document.getElementById('step-phantom');
+/* Oyun state */
+let running=false, over=false, score=0, best=0, lives=3;
+let speed=3.0, t=0;
+let kapi, obstacles=[], coins=[], clouds=[], groundX=0;
 
-  // Telegram webview'da Phantom yoksa: aynı sayfayı Phantom uygulamasında aç (mode=phantom & ver=…)
-  const PHANTOM_DEEPLINK =
-    "https://phantom.app/ul/browse/" + encodeURIComponent(APP_URL + "?mode=phantom&ver=" + VERSION);
+/* Fizik sabitleri */
+const G = 0.55;      // yerçekimi
+const JUMP = -9.8;   // zıplama hızı
+const COYOTE = 110;  // ms tolerans
+const GROUND_H = 72;
+const SPAWN_OBS = [900,1400];
+const SPAWN_COIN= [700,1100];
 
-  function telegramReturnLink(payloadB64) {
-    // Mini App’i startapp paramıyla tekrar açar; açılınca tgWebAppStartParam ile bota sendData yapacağız
-    return `https://t.me/${BOT_USERNAME}/${APP_SHORTNAME}?startapp=${encodeURIComponent(payloadB64)}`;
+/* Zamanlayıcılar */
+let last = 0, nextObs = 600, nextCoin = 400, lastOnGround = 0;
+
+/* Yardımcı */
+const R = (a,b)=> a + Math.random()*(b-a);
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
+
+/* ------- SPRITE ATÖLYESİ (Offscreen pixel canvas) ------- */
+const PX = 48;  // sprite kaynak boyutu (piksel)
+function makePxCanvas(){
+  const c = document.createElement("canvas");
+  c.width = c.height = PX;
+  const p = c.getContext("2d", { alpha: true });
+  p.imageSmoothingEnabled = false;
+  // pixel grid ile çizmek için kolaylaştırıcı:
+  const S = 1; // 1 px
+  function rect(x,y,w,h,fill){ p.fillStyle=fill; p.fillRect(Math.round(x),Math.round(y),Math.round(w),Math.round(h)); }
+  function circ(x,y,r,fill){ p.fillStyle=fill; p.beginPath(); p.arc(x,y,r,0,Math.PI*2); p.fill(); }
+  return {c,p,rect,circ};
+}
+
+/* Kapi 4 koşu frame'i (pixel-art) */
+function buildKapiFrames(){
+  const frames = [];
+  for(let i=0;i<4;i++){
+    const {c,p,rect,circ} = makePxCanvas();
+    p.clearRect(0,0,PX,PX);
+
+    // gövde / kafa (kahverengi tonları)
+    rect(18,20,20,14,"#8d5a2b"); // gövde
+    rect(22,26,12,10,"#c68a53"); // karın
+    rect(30,14,10,10,"#8d5a2b"); // kafa
+
+    // kulak (farklı açı)
+    rect(34,8,8,8,"#a56a36");
+    rect(33,10,3,4,"#c68a53");
+
+    // göz
+    rect(36,16,2,2,"#1b1b1b");
+
+    // kırmızı atkı (dalga)
+    rect(20,18,16,4,"#e74c3c");
+    const wave = [ -5, -2, 1, -3 ][i];
+    rect(12,18+wave,10,4,"#e74c3c");
+
+    // kanat (açısı frame'e göre değişsin)
+    const wing = [ -4, 0, 4, 0 ][i];
+    rect(18,24+wing,12,6,"#f3c97a");
+
+    // bacaklar (koşu animasyonu)
+    const legA = [0,3,6,3][i];
+    const legB = [6,3,0,3][i];
+    rect(22,33,4,6+legA,"#5d3b1a");
+    rect(30,33,4,6+legB,"#5d3b1a");
+
+    frames.push(c);
   }
+  return frames;
+}
 
-  function b64(obj){ return btoa(unescape(encodeURIComponent(JSON.stringify(obj)))); }
-  function fromB64(s){ try { return JSON.parse(decodeURIComponent(escape(atob(s)))); } catch { return null; } }
-  const enc = new TextEncoder();
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
+/* Coin 4 frame parıltı */
+function buildCoinFrames(){
+  const frames=[];
+  for(let i=0;i<4;i++){
+    const {c,p,rect,circ} = makePxCanvas();
+    p.clearRect(0,0,PX,PX);
+    // dış altın halka
+    circ(24,24,12,"#ffd23f");
+    // iç parlak çizgi (döner)
+    const angle = i*(Math.PI/8)+0.2;
+    p.fillStyle="#ffb703";
+    p.save(); p.translate(24,24); p.rotate(angle);
+    rect(-2,-12,4,24,"#ffb703");
+    p.restore();
+    frames.push(c);
+  }
+  return frames;
+}
 
-  // Telegram'a geri döndüysek (startapp paramı) → sendData & close
-  (function handleReturnFromPhantom() {
-    const sp = new URL(location.href).searchParams.get("tgWebAppStartParam");
-    if (sp && tg) {
-      const obj = fromB64(sp);
-      if (obj) {
-        tg.sendData(JSON.stringify(obj));
-        tg.close?.();
+/* Zemin tile */
+function buildGroundTile(){
+  const {c,p,rect} = makePxCanvas();
+  p.clearRect(0,0,PX,PX);
+  // toprak
+  rect(0,16,48,32,"#693d15");
+  // çimen
+  rect(0,16,48,6,"#2ecc71");
+  // taş doku
+  rect(6,34,6,4,"rgba(255,255,255,.06)");
+  rect(20,28,8,5,"rgba(255,255,255,.06)");
+  rect(32,36,7,5,"rgba(255,255,255,.06)");
+  return c;
+}
+
+/* Bulut tile */
+function buildCloud(){
+  const {c,p,circ} = makePxCanvas();
+  p.clearRect(0,0,PX,PX);
+  p.fillStyle="rgba(255,255,255,.95)";
+  circ(18,20,12,"#fff");
+  circ(28,22,10,"#fff");
+  circ(24,16,9,"#fff");
+  return c;
+}
+
+/* Sprite seti */
+const KAPI_FRAMES = buildKapiFrames();
+const COIN_FRAMES = buildCoinFrames();
+const TILE_GROUND = buildGroundTile();
+const TILE_CLOUD  = buildCloud();
+
+/* Kapi nesnesi */
+function resetKapi(){
+  kapi = {
+    x: 80, y: H()-GROUND_H-42, vy: 0,
+    onGround: true, frame:0, ftime:0, scale:2.2,
+    flap(){
+      const now = performance.now();
+      if (this.onGround || (now - lastOnGround)<COYOTE){
+        this.vy = JUMP; this.onGround=false;
+      }
+    },
+    step(dt){
+      this.vy += G;
+      this.y  += this.vy;
+      const floor = H()-GROUND_H-42;
+      if (this.y >= floor){
+        this.y=floor; this.vy=0;
+        if (!this.onGround) lastOnGround = performance.now();
+        this.onGround=true;
+      }
+      // animasyon
+      this.ftime += dt;
+      if (this.ftime>70){ this.ftime=0; this.frame=(this.frame+1)%KAPI_FRAMES.length; }
+    },
+    draw(){
+      const s = this.scale;
+      ctx.drawImage(KAPI_FRAMES[this.frame], this.x-24*s/2, this.y-24*s/2, 48*s, 48*s);
+    }
+  };
+}
+
+/* Objeler */
+let obstacles=[], coins=[], clouds=[];
+function spawnObstacle(){
+  const h = R(20,42)*1.2, w = R(22,34)*1.1;
+  obstacles.push({ x: W()+30, y: H()-GROUND_H-h, w, h });
+  nextObs = R(...SPAWN_OBS);
+}
+function spawnCoin(){
+  const y = H()-GROUND_H - (60 + Math.random()*100);
+  coins.push({ x: W()+30, y, r: 10, frame:0, ftime:0, taken:false, scale:1.6 });
+  nextCoin = R(...SPAWN_COIN);
+}
+function ensureClouds(){
+  while (clouds.length<6){
+    clouds.push({ x: R(0,W()), y: R(30,H()-GROUND_H-180), s: R(.2,.7), w: R(60,140) });
+  }
+}
+
+/* Çizimler */
+function drawBackground(dt){
+  // gökyüzü gradyan
+  const g = ctx.createLinearGradient(0,0,0,H());
+  g.addColorStop(0,"#1a2150"); g.addColorStop(1,"#0f1226");
+  ctx.fillStyle=g; ctx.fillRect(0,0,W(),H());
+
+  // bulutlar
+  clouds.forEach(c=>{
+    c.x -= c.s*speed*0.7;
+    if (c.x < -c.w){ c.x = W()+c.w; c.y = R(20,H()-GROUND_H-200); }
+    ctx.drawImage(TILE_CLOUD, c.x, c.y, c.w, 38);
+  });
+}
+function drawGround(){
+  groundX -= speed*1.2;
+  if (groundX <= -24) groundX += 24;
+  for (let x=groundX; x<W()+24; x+=24){
+    ctx.drawImage(TILE_GROUND, x, H()-GROUND_H, 24, GROUND_H);
+  }
+}
+function drawObstacles(){
+  ctx.fillStyle="#27ae60";
+  obstacles.forEach(o=>{
+    ctx.fillRect(o.x,o.y,o.w,o.h);
+    ctx.strokeStyle="#145a32"; ctx.lineWidth=3; ctx.strokeRect(o.x,o.y,o.w,o.h);
+  });
+}
+function drawCoins(dt){
+  coins.forEach(c=>{
+    if (c.taken) return;
+    c.ftime += dt;
+    if (c.ftime>90){ c.ftime=0; c.frame=(c.frame+1)%COIN_FRAMES.length; }
+    const s = c.scale;
+    ctx.drawImage(COIN_FRAMES[c.frame], c.x-24*s/2, c.y-24*s/2, 48*s, 48*s);
+  });
+}
+
+/* Çarpışma */
+function hitRect(o){
+  // kaba kutu çarpışma
+  const rx = kapi.x, ry = kapi.y, rr = 20;
+  return (rx + rr > o.x && rx - rr < o.x + o.w && ry + rr > o.y && ry - rr < o.y + o.h);
+}
+function hitCoin(c){
+  const dx = kapi.x - c.x, dy = kapi.y - c.y;
+  return (dx*dx + dy*dy) < (22*22);
+}
+
+/* Oyun döngüsü */
+function loop(ts){
+  if (!last) last = ts;
+  const dt = ts - last; last = ts;
+
+  if (running && !over){
+    t += dt;
+
+    // spawn
+    nextObs -= dt; if (nextObs<=0) spawnObstacle();
+    nextCoin -= dt; if (nextCoin<=0) spawnCoin();
+
+    // hareket
+    obstacles.forEach(o=> o.x -= speed);
+    obstacles = obstacles.filter(o=> o.x + o.w > -10);
+    coins.forEach(c=> c.x -= speed);
+    coins = coins.filter(c=> c.x > -20);
+
+    // skor (mesafe + coin bonusları ayrıca)
+    score += speed*0.02;
+    document.getElementById('score').textContent = Math.floor(score);
+
+    // kapi fizik
+    kapi.step(dt);
+
+    // çarpışmalar
+    for (const o of obstacles){
+      if (hitRect(o)){
+        lives -= 1; document.getElementById('lives').textContent = lives;
+        o.x -= 40; // ittir
+        if (lives<=0){ endGame(); break; }
       }
     }
-  })();
-
-  // Phantom ortamı tespiti (deeplink ile geldiğimizde ?mode=phantom var)
-  const isPhantomEnv = !!(window.solana?.isPhantom) || /mode=phantom/.test(location.search);
-  if (isPhantomEnv) {
-    stepTelegram.style.display = "none";
-    stepPhantom.style.display  = "block";
-  }
-
-  // 1) connect → 2) signMessage (önce utf8 dene, olmazsa parametresiz dene)
-  async function connectThenSign() {
-    try {
-      if (!window.solana?.isPhantom) {
-        statusEl && (statusEl.textContent = "Phantom'a yönlendiriliyor…");
-        window.open(PHANTOM_DEEPLINK, "_blank");
-        return;
+    for (const c of coins){
+      if (!c.taken && hitCoin(c)){
+        c.taken = true; score += 5;
       }
-
-      debugEl && (debugEl.textContent = "Phantom tespit edildi.");
-      // CONNECT
-      if (!window.solana.isConnected) {
-        debugEl && (debugEl.textContent += "\nCüzdana bağlanılıyor…");
-        await window.solana.connect({ onlyIfTrusted: false });
-        await sleep(200); // provider hazır olsun
-      }
-      debugEl && (debugEl.textContent += "\nBağlandı. İmza isteniyor…");
-
-      const payload = { t: Date.now(), n: Math.random().toString(36).slice(2) };
-      const msg = enc.encode(`okapi-connect:${payload.t}:${payload.n}`);
-
-      let resp;
-      try {
-        resp = await window.solana.signMessage(msg, "utf8");
-      } catch(e1) {
-        // bazı istemciler ikinci parametreyle sorun çıkarır; parametresiz dene
-        resp = await window.solana.signMessage(msg);
-      }
-
-      const result = {
-        type: "phantom_connect",
-        payload,
-        publicKey: resp.publicKey.toString(),
-        signature: Array.from(resp.signature)
-      };
-
-      if (tg) {
-        // Telegram içindeyiz → direkt ver, kapat
-        tg.sendData(JSON.stringify(result));
-        tg.close?.();
-      } else {
-        // Phantom içindeyiz → Telegram’a dönüş linki göster
-        const b64res = b64(result);
-        backToTelegram.href = telegramReturnLink(b64res);
-        backToTelegram.textContent = "Telegram’a Dön ve Bağlantıyı Tamamla";
-        backToTelegram.style.display = "inline-block";
-        debugEl && (debugEl.textContent += "\nİmza alındı. Telegram’a dönerek tamamlayın.");
-      }
-    } catch (e) {
-      const err = String(e);
-      debugEl && (debugEl.textContent += "\nHata: " + err);
-      tg?.sendData?.(JSON.stringify({ type:"phantom_connect_error", error: err }));
     }
+
+    // dinamik zorluk
+    speed += 0.0006*dt;
   }
 
-  // Telegram görünümü: Phantom'a taşır (veya varsa direkt connect+sign)
-  document.getElementById('connect')?.addEventListener('click', connectThenSign);
-  // Phantom görünümü: otomatik başlat + butonla tekrar dene
-  document.getElementById('connectPhantom')?.addEventListener('click', connectThenSign);
-  if (isPhantomEnv) {
-    // Phantom’da sayfa açıldığında otomatik akış
-    connectThenSign();
-  }
+  // çizimler
+  ensureClouds(); drawBackground(dt);
+  drawGround(); drawCoins(dt); drawObstacles();
+  kapi.draw();
+
+  requestAnimationFrame(loop);
+}
+
+/* Kontroller */
+function start(){
+  if (running && !over) return;
+  running=true; over=false; score=0; speed=3.0; lives=3;
+  obstacles=[]; coins=[]; nextObs=400; nextCoin=600; groundX=0; t=0; lastOnGround=0;
+  resetKapi();
+  document.getElementById('score').textContent = "0";
+  document.getElementById('lives').textContent = "3";
+  document.getElementById('hint').style.display="none";
+}
+function endGame(){
+  over=true; running=false;
+  best = Math.max(best, Math.floor(score));
+  const msg = `💥 Oyun bitti! Skor: ${Math.floor(score)} • En iyi: ${best}\nTekrar oynamak için Başlat.`;
+  const hint = document.getElementById('hint');
+  hint.textContent = msg; hint.style.display="block";
+  // skoru Telegram'a gönder
+  tg?.sendData?.(JSON.stringify({ type:"runner_score", score: Math.floor(score) }));
+}
+function tap(){ if (!running || over) start(); else kapi.flap(); }
+
+document.getElementById('btnStart').addEventListener('click', start);
+cvs.addEventListener('pointerdown', tap);
+document.addEventListener('keydown', e=>{ if (e.code==='Space') tap(); });
+
+/* Başlat */
+resetKapi();
+requestAnimationFrame(loop);
 </script>
 </body>
 </html>
