@@ -11,45 +11,97 @@
   <button id="connect">Phantom'a Bağlan</button>
 
   <script>
-  // Telegram WebApp objesi
-  const tg = window.Telegram?.WebApp;
-  if (tg) tg.expand();
-
-  // Şu anki miniapp URL’in (DO App Platform)
+  // ----- DÜZENLE -----
+  const BOT_USERNAME = "Okapitoken_bot";   // örn: my_okapi_bot   (@ işareti YOK)
+  const APP_SHORTNAME = "okapi-miniapp"; // BotFather Mini App kısa adı
   const APP_URL = "https://okapi-miniapp-7ex5j.ondigitalocean.app/";
+  // --------------------
 
-  // Phantom'da aynı sayfayı açan universal link
-  const PHANTOM_DEEPLINK = "https://phantom.app/ul/browse/" + encodeURIComponent(APP_URL);
+  const tg = window.Telegram?.WebApp; tg?.expand?.();
+  const PHANTOM_DEEPLINK = "https://phantom.app/ul/browse/" + encodeURIComponent(APP_URL + "?mode=phantom");
 
-  async function connectPhantom() {
-    // Eğer Phantom provider mevcutsa direkt imza akışı
-    if (window.solana?.isPhantom) {
-      try {
-        const payload = `okapi-connect:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-        const enc = new TextEncoder();
-        const msg = enc.encode(payload);
-        const resp = await window.solana.signMessage(msg, "utf8");
-        const result = {
-          type: "phantom_connect",
-          payload,
-          publicKey: resp.publicKey.toString(),
-          signature: Array.from(resp.signature)
-        };
-        tg?.sendData?.(JSON.stringify(result));
-        tg?.close?.(); // mini app’i kapat (isteğe bağlı)
-      } catch (e) {
-        tg?.sendData?.(JSON.stringify({ type:"phantom_connect_error", error: String(e) }));
-      }
-      return;
-    }
-
-    // Telegram webview'da Phantom yoksa → Phantom uygulamasında aç
-    // Kullanıcıyı Phantom'a yönlendiriyoruz (aynı sayfa Phantom içinde açılacak)
-    window.location.href = PHANTOM_DEEPLINK;
+  function telegramReturnLink(payloadBase64) {
+    return `https://t.me/${BOT_USERNAME}/${APP_SHORTNAME}?startapp=${encodeURIComponent(payloadBase64)}`;
   }
 
-  document.getElementById('connect').addEventListener('click', connectPhantom);
+  const enc = new TextEncoder();
+  const stepTelegram = document.getElementById('step-telegram');
+  const stepPhantom  = document.getElementById('step-phantom');
+  const statusEl     = document.getElementById('status');
+  const debugEl      = document.getElementById('debug');
+  const backToTelegram = document.getElementById('backToTelegram');
+
+  // startapp paramıyla Telegram'dan geri döndüysek, veriyi bota ilet ve kapan
+  (function handleReturnFromPhantom() {
+    const url = new URL(location.href);
+    const startParam = url.searchParams.get("tgWebAppStartParam");
+    if (startParam && tg) {
+      try {
+        const obj = JSON.parse(decodeURIComponent(escape(atob(startParam))));
+        tg.sendData(JSON.stringify(obj));
+        tg.close?.();
+      } catch {}
+    }
+  })();
+
+  // Phantom ortamı mı? (deeplink ile geldiğimizde mode=phantom olur)
+  const isPhantomEnv = !!(window.solana?.isPhantom) || /mode=phantom/.test(location.search);
+  if (isPhantomEnv) {
+    stepTelegram.style.display = "none";
+    stepPhantom.style.display  = "block";
+  }
+
+  // 1) CONNECT → 2) SIGN
+  async function connectThenSign() {
+    try {
+      if (!window.solana?.isPhantom) {
+        statusEl && (statusEl.textContent = "Phantom'a yönlendiriliyor…");
+        window.open(PHANTOM_DEEPLINK, "_blank");
+        return;
+      }
+
+      // 1) CONNECT (ilk seferde izin penceresi çıkar)
+      if (!window.solana.isConnected) {
+        debugEl && (debugEl.textContent = "Cüzdana bağlanılıyor…");
+        await window.solana.connect({ onlyIfTrusted: false });
+      }
+
+      // 2) SIGN MESSAGE
+      const payload = { t: Date.now(), n: Math.random().toString(36).slice(2) };
+      const msg = enc.encode(`okapi-connect:${payload.t}:${payload.n}`);
+      const resp = await window.solana.signMessage(msg, "utf8");
+
+      const result = {
+        type: "phantom_connect",
+        payload,
+        publicKey: resp.publicKey.toString(),
+        signature: Array.from(resp.signature)
+      };
+
+      // Telegram içindeysek direkt yolla, değilsek geri dönüş linki göster
+      if (tg) {
+        tg.sendData(JSON.stringify(result));
+        tg.close?.();
+      } else {
+        const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(result))));
+        backToTelegram.href = telegramReturnLink(b64);
+        backToTelegram.textContent = "Telegram’a Dön ve Bağlantıyı Tamamla";
+        backToTelegram.style.display = "inline-block";
+        debugEl && (debugEl.textContent = "İmza alındı. Telegram’a dönerek tamamla.");
+      }
+    } catch (e) {
+      const err = String(e);
+      debugEl && (debugEl.textContent = "Hata: " + err);
+      tg?.sendData?.(JSON.stringify({ type:"phantom_connect_error", error: err }));
+    }
+  }
+
+  // Telegram görünümü: buton Phantom'a yönlendirir (veya varsa direkt connect+sign)
+  document.getElementById('connect')?.addEventListener('click', connectThenSign);
+  // Phantom görünümü: buton doğrudan connect+sign yapar
+  document.getElementById('connectPhantom')?.addEventListener('click', connectThenSign);
 </script>
+
 
 </body>
 </html>
