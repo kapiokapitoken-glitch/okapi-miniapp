@@ -10,7 +10,7 @@
   #left{display:flex;gap:10px;align-items:center}
   .pill{background:rgba(255,255,255,.12);border-radius:999px;padding:6px 10px}
   #btnStart{background:#6c5ce7;border:0;color:#fff;padding:8px 12px;border-radius:10px}
-  #hint{position:fixed;left:50%;top:58%;transform:translate(-50%,-50%);color:#fff;opacity:.95;font-size:15px;text-align:center;z-index:2}
+  #hint{position:fixed;left:50%;top:58%;transform:translate(-50%,-50%);color:#fff;opacity:.95;font-size:15px;text-align:center;z-index:2;white-space:pre-line}
   canvas{display:block;touch-action:none}
 </style>
 </head>
@@ -22,50 +22,66 @@
   </div>
   <button id="btnStart">Başlat</button>
 </div>
-<div id="hint">Dokun / Space: Zıpla ⬆️<br/>Engelleri aş, coin topla!</div>
+<div id="hint">Dokun / Space: Zıpla ⬆️
+Engelleri aş, coin topla!</div>
 <canvas id="game"></canvas>
 
 <script>
-const tg = window.Telegram?.WebApp; tg?.expand?.();
+/* ======= 0) GÖRÜNÜR HATA YAKALAYICI (Debug) ======= */
+window.onerror = function (m, src, ln, col, err) {
+  var el = document.getElementById('hint');
+  if (el) {
+    el.textContent = 'Hata: ' + m;
+    el.style.display='block';
+  }
+};
 
-const cvs = document.getElementById("game");
-const ctx = cvs.getContext("2d");
+/* ======= 1) TELEGRAM WEBAPP TESPİTİ (iOS uyumlu) ======= */
+var tg = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
+try { if (tg && typeof tg.expand === 'function') tg.expand(); } catch (e) {}
+
+/* ======= 2) CANVAS KURULUM ======= */
+var cvs = document.getElementById("game");
+var ctx = cvs.getContext("2d");
 function fit(){
-  const w = Math.min(window.innerWidth, 420);
-  const h = Math.min(window.innerHeight, 780);
-  const dpr = window.devicePixelRatio || 1;
+  var w = Math.min(window.innerWidth, 420);
+  var h = Math.min(window.innerHeight, 780);
+  var dpr = window.devicePixelRatio || 1;
   cvs.style.width = w+"px"; cvs.style.height = h+"px";
   cvs.width = Math.floor(w*dpr); cvs.height = Math.floor(h*dpr);
   ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.imageSmoothingEnabled = false;
 }
-fit(); addEventListener("resize", fit);
-const W = ()=>cvs.clientWidth, H = ()=>cvs.clientHeight;
+fit(); window.addEventListener("resize", fit);
+function W(){ return cvs.clientWidth; }
+function H(){ return cvs.clientHeight; }
 
-let running=false, over=false, score=0, best=0, lives=3;
-let speed=3.0, t=0;
-let kapi, obstacles=[], coins=[], clouds=[], groundX=0;
+/* ======= 3) OYUN STATE ======= */
+var running=false, over=false, score=0, best=0, lives=3;
+var speed=3.0, t=0;
+var kapi, obstacles=[], coins=[], clouds=[], groundX=0;
 
-const G = 0.55, JUMP = -9.8, COYOTE = 110, GROUND_H = 72;
-const SPAWN_OBS = [900,1400], SPAWN_COIN= [700,1100];
+var G = 0.55, JUMP = -9.8, COYOTE = 110, GROUND_H = 72;
+var SPAWN_OBS = [900,1400], SPAWN_COIN= [700,1100];
 
-let last = 0, nextObs = 600, nextCoin = 400, lastOnGround = 0;
-const R = (a,b)=> a + Math.random()*(b-a);
+var last = 0, nextObs = 600, nextCoin = 400, lastOnGround = 0;
+function R(a,b){ return a + Math.random()*(b-a); }
 
-/* --- Pixel-art sprite atölyesi (offscreen) --- */
-const PX = 48;
+/* ======= 4) SPRITE ATÖLYESİ (offscreen pixel canvas) ======= */
+var PX = 48;
 function makePx(){
-  const c = document.createElement("canvas");
+  var c = document.createElement("canvas");
   c.width = c.height = PX;
-  const p = c.getContext("2d"); p.imageSmoothingEnabled = false;
-  const rect=(x,y,w,h,f)=>{ p.fillStyle=f; p.fillRect(Math.round(x),Math.round(y),Math.round(w),Math.round(h)); };
-  const circ=(x,y,r,f)=>{ p.fillStyle=f; p.beginPath(); p.arc(x,y,r,0,Math.PI*2); p.fill(); };
-  return {c,p,rect,circ};
+  var p = c.getContext("2d"); p.imageSmoothingEnabled = false;
+  function rect(x,y,w,h,f){ p.fillStyle=f; p.fillRect(Math.round(x),Math.round(y),Math.round(w),Math.round(h)); }
+  function circ(x,y,r,f){ p.fillStyle=f; p.beginPath(); p.arc(x,y,r,0,Math.PI*2); p.fill(); }
+  return {c:c,p:p,rect:rect,circ:circ};
 }
 function kapiFrames(){
-  const frames=[];
-  for(let i=0;i<4;i++){
-    const {c,p,rect,circ} = makePx(); p.clearRect(0,0,PX,PX);
+  var frames=[];
+  for(var i=0;i<4;i++){
+    var m=makePx(), c=m.c, p=m.p, rect=m.rect;
+    p.clearRect(0,0,PX,PX);
     rect(18,20,20,14,"#8d5a2b"); rect(22,26,12,10,"#c68a53"); rect(30,14,10,10,"#8d5a2b"); // gövde-kafa
     rect(34,8,8,8,"#a56a36"); rect(33,10,3,4,"#c68a53"); // kulak
     rect(36,16,2,2,"#1b1b1b"); // göz
@@ -77,76 +93,97 @@ function kapiFrames(){
   return frames;
 }
 function coinFrames(){
-  const frames=[]; for(let i=0;i<4;i++){
-    const {c,p,rect,circ} = makePx(); p.clearRect(0,0,PX,PX);
+  var frames=[]; for(var i=0;i<4;i++){
+    var m=makePx(), c=m.c, p=m.p, rect=m.rect, circ=m.circ;
+    p.clearRect(0,0,PX,PX);
     circ(24,24,12,"#ffd23f"); p.save(); p.translate(24,24); p.rotate(i*(Math.PI/8)+0.2);
     rect(-2,-12,4,24,"#ffb703"); p.restore(); frames.push(c);
   } return frames;
 }
 function groundTile(){
-  const {c,p,rect} = makePx(); rect(0,16,48,32,"#693d15"); rect(0,16,48,6,"#2ecc71");
+  var m=makePx(), c=m.c, rect=m.rect;
+  rect(0,16,48,32,"#693d15"); rect(0,16,48,6,"#2ecc71");
   rect(6,34,6,4,"rgba(255,255,255,.06)"); rect(20,28,8,5,"rgba(255,255,255,.06)"); rect(32,36,7,5,"rgba(255,255,255,.06)");
   return c;
 }
 function cloudTile(){
-  const {c,p} = makePx(); p.fillStyle="rgba(255,255,255,.95)";
+  var m=makePx(), c=m.c, p=m.p;
+  p.fillStyle="rgba(255,255,255,.95)";
   p.beginPath(); p.arc(18,20,12,0,Math.PI*2); p.fill();
   p.beginPath(); p.arc(28,22,10,0,Math.PI*2); p.fill();
   p.beginPath(); p.arc(24,16,9,0,Math.PI*2); p.fill(); return c;
 }
-const KAPI_FR = kapiFrames(), COIN_FR = coinFrames(), T_GROUND = groundTile(), T_CLOUD = cloudTile();
+var KAPI_FR = kapiFrames(), COIN_FR = coinFrames(), T_GROUND = groundTile(), T_CLOUD = cloudTile();
 
-/* Kapi nesnesi */
+/* ======= 5) KAPI NESNESİ ======= */
 function resetKapi(){
   kapi = {
     x: 80, y: H()-GROUND_H-42, vy: 0, onGround: true, frame:0, ftime:0, scale:2.2,
-    flap(){ const now=performance.now(); if(this.onGround || (now-lastOnGround)<COYOTE){ this.vy=JUMP; this.onGround=false; } },
-    step(dt){
-      this.vy += G; this.y += this.vy;
-      const floor = H()-GROUND_H-42;
-      if (this.y>=floor){ this.y=floor; this.vy=0; if(!this.onGround) lastOnGround=performance.now(); this.onGround=true; }
-      this.ftime+=dt; if(this.ftime>70){ this.ftime=0; this.frame=(this.frame+1)%KAPI_FR.length; }
+    flap: function(){
+      var now = performance.now();
+      if (this.onGround || (now - lastOnGround) < COYOTE){ this.vy = JUMP; this.onGround=false; }
     },
-    draw(){ const s=this.scale; ctx.drawImage(KAPI_FR[this.frame], this.x-24*s/2, this.y-24*s/2, 48*s, 48*s); }
+    step: function(dt){
+      this.vy += G; this.y += this.vy;
+      var floor = H()-GROUND_H-42;
+      if (this.y >= floor){ this.y=floor; this.vy=0; if(!this.onGround) lastOnGround=performance.now(); this.onGround=true; }
+      this.ftime += dt; if (this.ftime>70){ this.ftime=0; this.frame=(this.frame+1)%KAPI_FR.length; }
+    },
+    draw: function(){ var s=this.scale; ctx.drawImage(KAPI_FR[this.frame], this.x-24*s/2, this.y-24*s/2, 48*s, 48*s); }
   };
 }
 
-let obstacles=[], coins=[], clouds=[];
-function spawnObstacle(){ const h= (20+Math.random()*22)*1.6, w=(22+Math.random()*12)*1.2; obstacles.push({x:W()+30,y:H()-GROUND_H-h,w,h}); nextObs = R(...SPAWN_OBS); }
-function spawnCoin(){ const y= H()-GROUND_H-(60+Math.random()*100); coins.push({x:W()+30,y,r:10,frame:0,ftime:0,taken:false,scale:1.6}); nextCoin=R(...SPAWN_COIN); }
+/* ======= 6) OBJELER ======= */
+function spawnObstacle(){ var h=(20+Math.random()*22)*1.6, w=(22+Math.random()*12)*1.2; obstacles.push({x:W()+30,y:H()-GROUND_H-h,w:w,h:h}); nextObs = R(SPAWN_OBS[0], SPAWN_OBS[1]); }
+function spawnCoin(){ var y=H()-GROUND_H-(60+Math.random()*100); coins.push({x:W()+30,y:y,r:10,frame:0,ftime:0,taken:false,scale:1.6}); nextCoin = R(SPAWN_COIN[0], SPAWN_COIN[1]); }
 function ensureClouds(){ while(clouds.length<6){ clouds.push({x:R(0,W()), y:R(30,H()-GROUND_H-180), s:R(.2,.7), w:R(60,140)}); } }
 
+/* ======= 7) ÇİZİM ======= */
 function drawBg(dt){
-  const g=ctx.createLinearGradient(0,0,0,H()); g.addColorStop(0,"#1a2150"); g.addColorStop(1,"#0f1226"); ctx.fillStyle=g; ctx.fillRect(0,0,W(),H());
-  clouds.forEach(c=>{ c.x -= c.s*speed*0.7; if(c.x<-c.w){ c.x=W()+c.w; c.y=R(20,H()-GROUND_H-200); } ctx.drawImage(T_CLOUD, c.x, c.y, c.w, 38); });
+  var g=ctx.createLinearGradient(0,0,0,H()); g.addColorStop(0,"#1a2150"); g.addColorStop(1,"#0f1226");
+  ctx.fillStyle=g; ctx.fillRect(0,0,W(),H());
+  for (var i=0;i<clouds.length;i++){
+    var c=clouds[i]; c.x -= c.s*speed*0.7; if (c.x < -c.w){ c.x=W()+c.w; c.y=R(20,H()-GROUND_H-200); }
+    ctx.drawImage(T_CLOUD, c.x, c.y, c.w, 38);
+  }
 }
-function drawGround(){ groundX -= speed*1.2; if(groundX<=-24) groundX+=24; for(let x=groundX; x<W()+24; x+=24){ ctx.drawImage(T_GROUND, x, H()-GROUND_H, 24, GROUND_H); } }
-function drawObs(){ ctx.fillStyle="#27ae60"; obstacles.forEach(o=>{ ctx.fillRect(o.x,o.y,o.w,o.h); ctx.strokeStyle="#145a32"; ctx.lineWidth=3; ctx.strokeRect(o.x,o.y,o.w,o.h); }); }
-function drawCoins(dt){ coins.forEach(c=>{ if(c.taken) return; c.ftime+=dt; if(c.ftime>90){ c.ftime=0; c.frame=(c.frame+1)%COIN_FR.length; } const s=c.scale; ctx.drawImage(COIN_FR[c.frame], c.x-24*s/2, c.y-24*s/2, 48*s,48*s); }); }
+function drawGround(){ groundX -= speed*1.2; if(groundX <= -24) groundX += 24; for (var x=groundX; x<W()+24; x+=24){ ctx.drawImage(T_GROUND, x, H()-GROUND_H, 24, GROUND_H); } }
+function drawObs(){ ctx.fillStyle="#27ae60"; for (var i=0;i<obstacles.length;i++){ var o=obstacles[i]; ctx.fillRect(o.x,o.y,o.w,o.h); ctx.strokeStyle="#145a32"; ctx.lineWidth=3; ctx.strokeRect(o.x,o.y,o.w,o.h);} }
+function drawCoins(dt){ for (var i=0;i<coins.length;i++){ var c=coins[i]; if (c.taken) continue; c.ftime+=dt; if(c.ftime>90){ c.ftime=0; c.frame=(c.frame+1)%COIN_FR.length; } var s=c.scale; ctx.drawImage(COIN_FR[c.frame], c.x-24*s/2, c.y-24*s/2, 48*s, 48*s);} }
 
-const hitRect = o => { const rx=kapi.x, ry=kapi.y, rr=20; return (rx+rr>o.x && rx-rr<o.x+o.w && ry+rr>o.y && ry-rr<o.y+o.h); };
-const hitCoin = c => { const dx=kapi.x-c.x, dy=kapi.y-c.y; return (dx*dx+dy*dy)<(22*22); };
+/* ======= 8) ÇARPIŞMA ======= */
+function hitRect(o){ var rx=kapi.x, ry=kapi.y, rr=20; return (rx+rr>o.x && rx-rr<o.x+o.w && ry+rr>o.y && ry-rr<o.y+o.h); }
+function hitCoin(c){ var dx=kapi.x-c.x, dy=kapi.y-c.y; return (dx*dx+dy*dy) < (22*22); }
 
+/* ======= 9) DÖNGÜ ======= */
 function loop(ts){
   if(!last) last=ts;
-  const dt=ts-last; last=ts;
+  var dt = ts - last; last = ts;
 
-  if(running && !over){
-    t+=dt;
-    nextObs-=dt; if(nextObs<=0) spawnObstacle();
-    nextCoin-=dt; if(nextCoin<=0) spawnCoin();
+  if (running && !over){
+    t += dt;
+    nextObs -= dt; if(nextObs<=0) spawnObstacle();
+    nextCoin -= dt; if(nextCoin<=0) spawnCoin();
 
-    obstacles.forEach(o=> o.x -= speed); obstacles = obstacles.filter(o=> o.x+o.w>-10);
-    coins.forEach(c=> c.x -= speed); coins = coins.filter(c=> c.x>-20);
+    for (var i=0;i<obstacles.length;i++) obstacles[i].x -= speed;
+    obstacles = obstacles.filter(function(o){ return o.x+o.w>-10; });
+    for (var j=0;j<coins.length;j++) coins[j].x -= speed;
+    coins = coins.filter(function(c){ return c.x>-20; });
 
     score += speed*0.02; document.getElementById('score').textContent = Math.floor(score);
     kapi.step(dt);
 
-    for(const o of obstacles){
-      if(hitRect(o)){ lives-=1; document.getElementById('lives').textContent=lives; o.x-=40; if(lives<=0){ endGame(); break; } }
+    for (var i2=0;i2<obstacles.length;i2++){
+      var o=obstacles[i2];
+      if (hitRect(o)){
+        lives -= 1; document.getElementById('lives').textContent = lives;
+        o.x -= 40;
+        if (lives<=0){ endGame(); break; }
+      }
     }
-    for(const c of coins){
-      if(!c.taken && hitCoin(c)){ c.taken=true; score+=5; }
+    for (var j2=0;j2<coins.length;j2++){
+      var c=coins[j2];
+      if (!c.taken && hitCoin(c)){ c.taken=true; score += 5; }
     }
     speed += 0.0006*dt;
   }
@@ -155,25 +192,45 @@ function loop(ts){
   requestAnimationFrame(loop);
 }
 
+/* ======= 10) KONTROLLER ======= */
 function start(){
-  if(running && !over) return;
   running=true; over=false; score=0; speed=3.0; lives=3;
   obstacles=[]; coins=[]; nextObs=400; nextCoin=600; groundX=0; t=0; lastOnGround=0;
-  resetKapi(); document.getElementById('score').textContent="0"; document.getElementById('lives').textContent="3";
-  document.getElementById('hint').style.display="none";
+  resetKapi();
+  document.getElementById('score').textContent="0";
+  document.getElementById('lives').textContent="3";
+  var hint=document.getElementById('hint'); hint.style.display="none";
 }
 function endGame(){
   over=true; running=false; best=Math.max(best,Math.floor(score));
-  const hint=document.getElementById('hint'); hint.textContent=`💥 Oyun bitti! Skor: ${Math.floor(score)} • En iyi: ${best}\nTekrar oynamak için Başlat.`; hint.style.display="block";
-  tg?.sendData?.(JSON.stringify({ type:"runner_score", score: Math.floor(score) }));
+  var hint=document.getElementById('hint');
+  hint.textContent = "💥 Oyun bitti! Skor: " + Math.floor(score) + " • En iyi: " + best + "\nTekrar oynamak için Başlat.";
+  hint.style.display="block";
+  try{
+    if (tg && typeof tg.sendData === 'function'){
+      tg.sendData(JSON.stringify({ type:"runner_score", score: Math.floor(score) }));
+    }
+  }catch(e){}
 }
-function tap(){ if(!running || over) start(); else kapi.flap(); }
+function tap(ev){
+  // iOS dokunmatik uyumu
+  try{ if (ev && typeof ev.preventDefault==='function') ev.preventDefault(); }catch(_){}
+  if (!running || over) start(); else kapi.flap();
+}
 
-document.getElementById('btnStart').addEventListener('click', start);
-cvs.addEventListener('pointerdown', tap);
-document.addEventListener('keydown', e=>{ if(e.code==='Space') tap(); });
+/* Event binding (fallback'li) */
+(function bindControls(){
+  var btn = document.getElementById('btnStart');
+  if (btn) btn.addEventListener('click', function(){ start(); }, {passive:true});
 
-resetKapi(); requestAnimationFrame(loop);
+  var tapEvent = ('ontouchstart' in window) ? 'touchstart' : (window.PointerEvent ? 'pointerdown' : 'mousedown');
+  cvs.addEventListener(tapEvent, tap, {passive:false});
+  document.addEventListener('keydown', function(e){ if (e.code==='Space') tap(e); });
+})();
+
+/* ======= 11) BAŞLAT ======= */
+resetKapi();
+requestAnimationFrame(loop);
 </script>
 </body>
 </html>
