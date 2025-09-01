@@ -3,232 +3,469 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
-<title>Kapi Runner — Pixel</title>
+<title>Kapi Runner — Deluxe</title>
 <style>
-  html,body{margin:0;padding:0;background:#0f1226;height:100%;overflow:hidden;font-family:system-ui,Arial}
-  #ui{position:fixed;left:0;right:0;top:0;display:flex;align-items:center;justify-content:space-between;padding:8px 12px;color:#fff;z-index:3}
-  #left{display:flex;gap:10px;align-items:center}
+  html,body{margin:0;padding:0;background:#0d0f1f;height:100%;overflow:hidden;font-family:system-ui,Arial}
+  #topbar{position:fixed;left:0;right:0;top:0;display:flex;align-items:center;gap:8px;justify-content:space-between;padding:8px 12px;color:#fff;z-index:5}
+  .left{display:flex;gap:8px;align-items:center}
   .pill{background:rgba(255,255,255,.12);border-radius:999px;padding:6px 10px}
-  #btnStart{background:#6c5ce7;border:0;color:#fff;padding:8px 12px;border-radius:10px}
-  #hint{position:fixed;left:50%;top:58%;transform:translate(-50%,-50%);color:#fff;opacity:.95;font-size:15px;text-align:center;z-index:2;white-space:pre-line}
+  .btn{background:#6c5ce7;border:0;color:#fff;padding:8px 12px;border-radius:10px}
+  .btn.secondary{background:#3b3f6f}
+  #hint{position:fixed;left:50%;top:55%;transform:translate(-50%,-50%);color:#fff;opacity:.95;font-size:15px;text-align:center;z-index:4;white-space:pre-line}
+  #toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:rgba(0,0,0,.6);color:#fff;padding:8px 12px;border-radius:10px;display:none;z-index:6}
   canvas{display:block;touch-action:none}
 </style>
 </head>
 <body>
-<div id="ui">
-  <div id="left">
+<div id="topbar">
+  <div class="left">
     <div class="pill">❤️ <span id="lives">3</span></div>
     <div class="pill">⭐ <span id="score">0</span></div>
+    <div class="pill">x<span id="combo">1</span></div>
+    <button id="btnSound" class="btn secondary">🔈 Ses</button>
   </div>
-  <button id="btnStart">Başlat</button>
+  <div class="left">
+    <button id="btnPause" class="btn secondary">⏸️ Duraklat</button>
+    <button id="btnStart" class="btn">Başlat</button>
+  </div>
 </div>
 <div id="hint">Dokun / Space: Zıpla ⬆️
-Engelleri aş, coin topla!</div>
+Coin topla, güçlendirmeleri kap!
+Engelleri aş; canın bitince oyun biter.</div>
+<div id="toast"></div>
 <canvas id="game"></canvas>
 
 <script>
-/* ======= 0) GÖRÜNÜR HATA YAKALAYICI (Debug) ======= */
-window.onerror = function (m, src, ln, col, err) {
-  var el = document.getElementById('hint');
-  if (el) {
-    el.textContent = 'Hata: ' + m;
-    el.style.display='block';
-  }
+/* ========= HATA YAKALAMA (ekranda göster) ========= */
+window.onerror = function (m) {
+  const el = document.getElementById('hint');
+  if (el) { el.textContent = 'Hata: ' + m; el.style.display='block'; }
 };
 
-/* ======= 1) TELEGRAM WEBAPP TESPİTİ (iOS uyumlu) ======= */
+/* ========= TELEGRAM WEBAPP (iOS uyumlu) ========= */
 var tg = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
 try { if (tg && typeof tg.expand === 'function') tg.expand(); } catch (e) {}
 
-/* ======= 2) CANVAS KURULUM ======= */
-var cvs = document.getElementById("game");
-var ctx = cvs.getContext("2d");
+/* ========= CANVAS ========= */
+const cvs = document.getElementById("game");
+const ctx = cvs.getContext("2d");
 function fit(){
-  var w = Math.min(window.innerWidth, 420);
-  var h = Math.min(window.innerHeight, 780);
-  var dpr = window.devicePixelRatio || 1;
+  const w = Math.min(window.innerWidth, 460);
+  const h = Math.min(window.innerHeight, 820);
+  const dpr = window.devicePixelRatio || 1;
   cvs.style.width = w+"px"; cvs.style.height = h+"px";
   cvs.width = Math.floor(w*dpr); cvs.height = Math.floor(h*dpr);
   ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.imageSmoothingEnabled = false;
 }
-fit(); window.addEventListener("resize", fit);
-function W(){ return cvs.clientWidth; }
-function H(){ return cvs.clientHeight; }
+fit(); addEventListener("resize", fit);
+const W = ()=>cvs.clientWidth, H = ()=>cvs.clientHeight;
 
-/* ======= 3) OYUN STATE ======= */
-var running=false, over=false, score=0, best=0, lives=3;
-var speed=3.0, t=0;
-var kapi, obstacles=[], coins=[], clouds=[], groundX=0;
-
-var G = 0.55, JUMP = -9.8, COYOTE = 110, GROUND_H = 72;
-var SPAWN_OBS = [900,1400], SPAWN_COIN= [700,1100];
-
-var last = 0, nextObs = 600, nextCoin = 400, lastOnGround = 0;
-function R(a,b){ return a + Math.random()*(b-a); }
-
-/* ======= 4) SPRITE ATÖLYESİ (offscreen pixel canvas) ======= */
-var PX = 48;
-function makePx(){
-  var c = document.createElement("canvas");
-  c.width = c.height = PX;
-  var p = c.getContext("2d"); p.imageSmoothingEnabled = false;
-  function rect(x,y,w,h,f){ p.fillStyle=f; p.fillRect(Math.round(x),Math.round(y),Math.round(w),Math.round(h)); }
-  function circ(x,y,r,f){ p.fillStyle=f; p.beginPath(); p.arc(x,y,r,0,Math.PI*2); p.fill(); }
-  return {c:c,p:p,rect:rect,circ:circ};
+/* ========= SES ========= */
+let audioEnabled = false;
+let ac, bip1, bip2, hitS;
+function initAudio(){
+  if (audioEnabled && ac) return;
+  try {
+    ac = new (window.AudioContext || window.webkitAudioContext)();
+    function tone(freq, dur, type='sine', gain=0.05){
+      const o = ac.createOscillator();
+      const g = ac.createGain();
+      o.type = type; o.frequency.value = freq;
+      g.gain.value = gain;
+      o.connect(g); g.connect(ac.destination);
+      o.start();
+      o.stop(ac.currentTime + dur);
+    }
+    bip1 = ()=>tone(880, 0.08, 'square', 0.06);
+    bip2 = ()=>tone(1320,0.06, 'square', 0.05);
+    hitS = ()=>tone(120, 0.10, 'sawtooth', 0.06);
+  } catch(e){ audioEnabled = false; }
 }
-function kapiFrames(){
-  var frames=[];
-  for(var i=0;i<4;i++){
-    var m=makePx(), c=m.c, p=m.p, rect=m.rect;
-    p.clearRect(0,0,PX,PX);
-    rect(18,20,20,14,"#8d5a2b"); rect(22,26,12,10,"#c68a53"); rect(30,14,10,10,"#8d5a2b"); // gövde-kafa
-    rect(34,8,8,8,"#a56a36"); rect(33,10,3,4,"#c68a53"); // kulak
-    rect(36,16,2,2,"#1b1b1b"); // göz
-    rect(20,18,16,4,"#e74c3c"); rect(12,18+[-5,-2,1,-3][i],10,4,"#e74c3c"); // atkı
-    rect(18,24+[-4,0,4,0][i],12,6,"#f3c97a"); // kanat
-    rect(22,33,4,6+[0,3,6,3][i],"#5d3b1a"); rect(30,33,4,6+[6,3,0,3][i],"#5d3b1a"); // bacak
+
+/* ========= STATE ========= */
+let running=false, paused=false, over=false;
+let score=0, best=0, lives=3, combo=1, comboTimer=0;
+let speed=3.2, t=0, groundX=0;
+let last=0, nextObs=600, nextCoin=400, nextPower=5000, lastOnGround=0;
+
+const G = 0.56, JUMP=-10.2, COYOTE=110, GROUND_H=78;
+const SPAWN_OBS=[900,1400], SPAWN_COIN=[600,1000];
+
+let kapi, particles=[], coins=[], obstacles=[], powers=[], clouds=[], stars=[], mountains=[], trees=[];
+let shield=0, magnet=0;
+
+/* ========= YARDIMCILAR ========= */
+const R = (a,b)=> a + Math.random()*(b-a);
+const clamp = (v,a,b)=> Math.max(a, Math.min(b, v));
+function toast(s){ const el = document.getElementById('toast'); el.textContent=s; el.style.display='block'; setTimeout(()=>el.style.display='none', 1200); }
+
+/* ========= SPRITE ATÖLYESİ (offscreen pixel) ========= */
+const PX = 64;
+function makePx(){
+  const c = document.createElement('canvas'); c.width = c.height = PX;
+  const p = c.getContext('2d'); p.imageSmoothingEnabled = false;
+  const rect=(x,y,w,h,f)=>{ p.fillStyle=f; p.fillRect(x|0,y|0,w|0,h|0); };
+  const circ=(x,y,r,f)=>{ p.fillStyle=f; p.beginPath(); p.arc(x,y,r,0,Math.PI*2); p.fill(); };
+  const line=(x1,y1,x2,y2,w,f)=>{ p.strokeStyle=f; p.lineWidth=w; p.beginPath(); p.moveTo(x1,y1); p.lineTo(x2,y2); p.stroke(); };
+  return {c,p,rect,circ,line};
+}
+
+/* ---- Kapi 6 kare (göz kırpma + atkı dalgası + kontur) ---- */
+function buildKapiFrames(){
+  const frames=[];
+  for(let i=0;i<6;i++){
+    const {c,p,rect,circ,line} = makePx(); p.clearRect(0,0,PX,PX);
+    // kontur fonksiyonu
+    function outline(drawFn){
+      p.save(); p.translate(0,0);
+      p.globalCompositeOperation='destination-over';
+      const oc = document.createElement('canvas'); oc.width=PX; oc.height=PX;
+      const op = oc.getContext('2d'); op.imageSmoothingEnabled=false;
+      drawFn(op);
+      p.drawImage(oc,1,0); p.drawImage(oc,-1,0); p.drawImage(oc,0,1); p.drawImage(oc,0,-1);
+      p.globalCompositeOperation='source-over';
+      p.drawImage(oc,0,0);
+      p.restore();
+    }
+    // gövde çizen fn
+    function drawBody(g){
+      g.fillStyle="#8d5a2b"; g.fillRect(18,26,26,18);           // gövde
+      g.fillStyle="#c68a53"; g.fillRect(22,30,16,12);           // karın
+      g.fillStyle="#8d5a2b"; g.fillRect(34,18,12,12);           // kafa
+      // kulak
+      g.fillStyle="#a56a36"; g.fillRect(40,12,10,8);
+      g.fillStyle="#c68a53"; g.fillRect(39,14,3,4);
+      // göz (blink)
+      if (i===3){ g.fillStyle="#1b1b1b"; g.fillRect(40,22,10,2); } // göz kapalı
+      else { g.fillStyle="#1b1b1b"; g.fillRect(40,20,3,3); }        // göz açık
+      // kanat
+      const wing = [-3,-1,2,1,2,-1][i];
+      g.fillStyle="#f3c97a"; g.fillRect(20,32+wing,14,7);
+      // bacak
+      const la=[0,2,5,2,0,2][i], lb=[6,3,0,3,6,3][i];
+      g.fillStyle="#5d3b1a"; g.fillRect(24,40,4,6+la);
+      g.fillRect(32,40,4,6+lb);
+      // atkı + dalga
+      g.fillStyle="#e74c3c"; g.fillRect(20,26,18,5);
+      const wave=[-6,-3,0,-4,-1,-5][i];
+      g.fillRect(10,26+wave,10,5);
+    }
+    outline(drawBody);
     frames.push(c);
   }
   return frames;
 }
-function coinFrames(){
-  var frames=[]; for(var i=0;i<4;i++){
-    var m=makePx(), c=m.c, p=m.p, rect=m.rect, circ=m.circ;
-    p.clearRect(0,0,PX,PX);
-    circ(24,24,12,"#ffd23f"); p.save(); p.translate(24,24); p.rotate(i*(Math.PI/8)+0.2);
-    rect(-2,-12,4,24,"#ffb703"); p.restore(); frames.push(c);
+
+/* Coin + powerup ikonları */
+function buildCoinFrames(){
+  const frames=[]; for(let i=0;i<6;i++){
+    const {c,p,rect,circ} = makePx(); p.clearRect(0,0,PX,PX);
+    const ang = i*(Math.PI/6)+0.2;
+    circ(32,32,14,"#ffd23f"); p.save(); p.translate(32,32); p.rotate(ang);
+    rect(-3,-14,6,28,"#ffb703"); p.restore();
+    // parlama
+    rect(18,30,4,4,"rgba(255,255,255,0.35)");
+    frames.push(c);
   } return frames;
 }
-function groundTile(){
-  var m=makePx(), c=m.c, rect=m.rect;
-  rect(0,16,48,32,"#693d15"); rect(0,16,48,6,"#2ecc71");
-  rect(6,34,6,4,"rgba(255,255,255,.06)"); rect(20,28,8,5,"rgba(255,255,255,.06)"); rect(32,36,7,5,"rgba(255,255,255,.06)");
+function buildPowerIcon(type){
+  const {c,p,rect,circ} = makePx(); p.clearRect(0,0,PX,PX);
+  if (type==='shield'){
+    circ(32,32,16,"rgba(46,204,113,0.25)");
+    rect(24,20,16,24,"#2ecc71");
+    rect(26,22,12,20,"#27ae60");
+  }else{ // magnet
+    rect(20,20,24,24,"#e74c3c");
+    rect(26,20,12,10,"#c0392b");
+    rect(20,36,8,8,"#bdc3c7");
+    rect(36,36,8,8,"#bdc3c7");
+  }
   return c;
 }
-function cloudTile(){
-  var m=makePx(), c=m.c, p=m.p;
-  p.fillStyle="rgba(255,255,255,.95)";
-  p.beginPath(); p.arc(18,20,12,0,Math.PI*2); p.fill();
-  p.beginPath(); p.arc(28,22,10,0,Math.PI*2); p.fill();
-  p.beginPath(); p.arc(24,16,9,0,Math.PI*2); p.fill(); return c;
-}
-var KAPI_FR = kapiFrames(), COIN_FR = coinFrames(), T_GROUND = groundTile(), T_CLOUD = cloudTile();
 
-/* ======= 5) KAPI NESNESİ ======= */
+/* Arka plan katmanları */
+function buildStar(){ const {c,p} = makePx(); p.fillStyle="#ffffff"; for(let i=0;i<30;i++){ p.fillRect((Math.random()*PX)|0,(Math.random()*PX)|0,1,1);} return c; }
+function buildMountain(){ const {c,p} = makePx(); p.fillStyle="#1b2a4a"; p.beginPath(); p.moveTo(0,48); p.lineTo(12,26); p.lineTo(30,48); p.closePath(); p.fill(); p.beginPath(); p.moveTo(24,48); p.lineTo(36,28); p.lineTo(64,48); p.closePath(); p.fill(); return c; }
+function buildTree(){ const {c,p} = makePx(); p.fillStyle="#145a32"; p.fillRect(28,18,8,18); p.fillStyle="#196f3d"; p.fillRect(24,10,16,10); p.fillRect(26,6,12,6); return c; }
+function buildGround(){ const {c,p} = makePx(); p.fillStyle="#73491e"; p.fillRect(0,16,64,48); p.fillStyle="#2ecc71"; p.fillRect(0,16,64,7); return c; }
+function buildCloud(){ const {c,p} = makePx(); p.fillStyle="rgba(255,255,255,.95)"; p.beginPath(); p.arc(20,26,10,0,Math.PI*2); p.fill(); p.beginPath(); p.arc(32,22,12,0,Math.PI*2); p.fill(); p.beginPath(); p.arc(44,26,10,0,Math.PI*2); p.fill(); return c; }
+
+const KAPI = buildKapiFrames();
+const COIN = buildCoinFrames();
+const ICON_SHIELD = buildPowerIcon('shield');
+const ICON_MAGNET = buildPowerIcon('magnet');
+const T_STAR = buildStar(), T_MOUN = buildMountain(), T_TREE = buildTree(), T_GROUND = buildGround(), T_CLOUD = buildCloud();
+
+/* ========= NESNELER ========= */
 function resetKapi(){
   kapi = {
-    x: 80, y: H()-GROUND_H-42, vy: 0, onGround: true, frame:0, ftime:0, scale:2.2,
-    flap: function(){
-      var now = performance.now();
-      if (this.onGround || (now - lastOnGround) < COYOTE){ this.vy = JUMP; this.onGround=false; }
-    },
-    step: function(dt){
+    x: 90, y: H()-GROUND_H-50, vy: 0,
+    frame:0, ftime:0, scale:2.2,
+    inv:0, // vurulma flaşı
+    flap(){ const now=performance.now(); if (this.onGround || (now-lastOnGround)<COYOTE){ this.vy=JUMP; this.onGround=false; if(audioEnabled) bip1(); } },
+    onGround:true,
+    step(dt){
       this.vy += G; this.y += this.vy;
-      var floor = H()-GROUND_H-42;
+      const floor = H()-GROUND_H-50;
       if (this.y >= floor){ this.y=floor; this.vy=0; if(!this.onGround) lastOnGround=performance.now(); this.onGround=true; }
-      this.ftime += dt; if (this.ftime>70){ this.ftime=0; this.frame=(this.frame+1)%KAPI_FR.length; }
+      this.ftime += dt; if (this.ftime>70){ this.ftime=0; this.frame=(this.frame+1)%KAPI.length; }
+      if (this.inv>0) this.inv -= dt;
     },
-    draw: function(){ var s=this.scale; ctx.drawImage(KAPI_FR[this.frame], this.x-24*s/2, this.y-24*s/2, 48*s, 48*s); }
+    draw(){
+      const s=this.scale;
+      if (shield>0){ // kalkan halkası
+        ctx.globalAlpha = 0.25 + 0.1*Math.sin(performance.now()/150);
+        ctx.beginPath(); ctx.arc(this.x,this.y,36,0,Math.PI*2); ctx.fillStyle="#2ecc71"; ctx.fill(); ctx.globalAlpha=1;
+      }
+      if (magnet>0){ // mıknatıs hale
+        ctx.globalAlpha = 0.18; ctx.beginPath(); ctx.arc(this.x,this.y,54,0,Math.PI*2); ctx.fillStyle="#e74c3c"; ctx.fill(); ctx.globalAlpha=1;
+      }
+      if (this.inv>0){ ctx.globalAlpha = 0.5+0.5*Math.sin(performance.now()/40); }
+      ctx.drawImage(KAPI[this.frame], this.x-32*s/2, this.y-32*s/2, 64*s, 64*s);
+      ctx.globalAlpha = 1;
+    }
   };
 }
 
-/* ======= 6) OBJELER ======= */
-function spawnObstacle(){ var h=(20+Math.random()*22)*1.6, w=(22+Math.random()*12)*1.2; obstacles.push({x:W()+30,y:H()-GROUND_H-h,w:w,h:h}); nextObs = R(SPAWN_OBS[0], SPAWN_OBS[1]); }
-function spawnCoin(){ var y=H()-GROUND_H-(60+Math.random()*100); coins.push({x:W()+30,y:y,r:10,frame:0,ftime:0,taken:false,scale:1.6}); nextCoin = R(SPAWN_COIN[0], SPAWN_COIN[1]); }
-function ensureClouds(){ while(clouds.length<6){ clouds.push({x:R(0,W()), y:R(30,H()-GROUND_H-180), s:R(.2,.7), w:R(60,140)}); } }
-
-/* ======= 7) ÇİZİM ======= */
-function drawBg(dt){
-  var g=ctx.createLinearGradient(0,0,0,H()); g.addColorStop(0,"#1a2150"); g.addColorStop(1,"#0f1226");
-  ctx.fillStyle=g; ctx.fillRect(0,0,W(),H());
-  for (var i=0;i<clouds.length;i++){
-    var c=clouds[i]; c.x -= c.s*speed*0.7; if (c.x < -c.w){ c.x=W()+c.w; c.y=R(20,H()-GROUND_H-200); }
-    ctx.drawImage(T_CLOUD, c.x, c.y, c.w, 38);
-  }
+function spawnObstacle(){
+  const type = (Math.random()<0.33) ? 'log' : (Math.random()<0.5 ? 'bush' : 'rock');
+  let h,w,y = 0;
+  if (type==='log'){ h=26; w=46; y=H()-GROUND_H-h; }
+  else if (type==='bush'){ h=40; w=34; y=H()-GROUND_H-h; }
+  else { h=56; w=28; y=H()-GROUND_H-h; }
+  obstacles.push({x:W()+40, y, w, h, type});
+  nextObs = R(SPAWN_OBS[0], SPAWN_OBS[1]);
 }
-function drawGround(){ groundX -= speed*1.2; if(groundX <= -24) groundX += 24; for (var x=groundX; x<W()+24; x+=24){ ctx.drawImage(T_GROUND, x, H()-GROUND_H, 24, GROUND_H); } }
-function drawObs(){ ctx.fillStyle="#27ae60"; for (var i=0;i<obstacles.length;i++){ var o=obstacles[i]; ctx.fillRect(o.x,o.y,o.w,o.h); ctx.strokeStyle="#145a32"; ctx.lineWidth=3; ctx.strokeRect(o.x,o.y,o.w,o.h);} }
-function drawCoins(dt){ for (var i=0;i<coins.length;i++){ var c=coins[i]; if (c.taken) continue; c.ftime+=dt; if(c.ftime>90){ c.ftime=0; c.frame=(c.frame+1)%COIN_FR.length; } var s=c.scale; ctx.drawImage(COIN_FR[c.frame], c.x-24*s/2, c.y-24*s/2, 48*s, 48*s);} }
 
-/* ======= 8) ÇARPIŞMA ======= */
-function hitRect(o){ var rx=kapi.x, ry=kapi.y, rr=20; return (rx+rr>o.x && rx-rr<o.x+o.w && ry+rr>o.y && ry-rr<o.y+o.h); }
-function hitCoin(c){ var dx=kapi.x-c.x, dy=kapi.y-c.y; return (dx*dx+dy*dy) < (22*22); }
+function spawnCoin(){
+  const y = H()-GROUND_H - R(70, 140);
+  coins.push({x:W()+30, y, r:12, frame:0, ftime:0, taken:false, scale:1.7, spark:0});
+  nextCoin = R(SPAWN_COIN[0], SPAWN_COIN[1]);
+}
 
-/* ======= 9) DÖNGÜ ======= */
+function spawnPower(){
+  const kind = (Math.random()<0.5) ? 'shield' : 'magnet';
+  const y = H()-GROUND_H - R(80, 150);
+  powers.push({x:W()+50, y, kind, r:14, scale:1.6, t:0});
+  nextPower = R(6000, 9000);
+}
+
+function ensureBackdrops(){
+  if (stars.length<8) stars.push({x:R(0,W()), y:R(0,H()*0.6), w:R(40,100), s:R(.05,.12)});
+  if (mountains.length<5) mountains.push({x:R(0,W()), y:H()-GROUND_H-140, w:R(160,260), s:R(.15,.25)});
+  if (trees.length<8) trees.push({x:R(0,W()), y:H()-GROUND_H-90, w:R(60,100), s:R(.35,.55)});
+  if (clouds.length<6) clouds.push({x:R(0,W()), y:R(20,H()-GROUND_H-200), w:R(70,140), s:R(.2,.5)});
+}
+
+function part(x,y,col,vx,vy,life){ particles.push({x,y,col,vx,vy,life}); }
+
+/* ========= ÇİZİM ========= */
+function drawBackground(dt){
+  // gece-gökyüzü
+  const g = ctx.createLinearGradient(0,0,0,H());
+  g.addColorStop(0,"#141a3a"); g.addColorStop(1,"#0d0f1f");
+  ctx.fillStyle=g; ctx.fillRect(0,0,W(),H());
+
+  // yıldızlar
+  stars.forEach(s=>{ s.x -= s.s*0.3; if (s.x<-s.w) s.x=W()+s.w; ctx.drawImage(T_STAR, s.x, s.y, s.w, s.w); });
+  // dağlar
+  mountains.forEach(m=>{ m.x -= m.s*0.6; if (m.x<-m.w) m.x=W()+m.w; ctx.drawImage(T_MOUN, m.x, m.y, m.w, m.w*0.8); });
+  // ağaçlar
+  trees.forEach(a=>{ a.x -= a.s*0.9; if (a.x<-a.w) a.x=W()+a.w; ctx.drawImage(T_TREE, a.x, a.y, a.w, a.w*1.2); });
+  // bulutlar
+  clouds.forEach(c=>{ c.x -= c.s*speed*0.7; if (c.x<-c.w){ c.x=W()+c.w; c.y=R(20,H()-GROUND_H-200); } ctx.drawImage(T_CLOUD, c.x, c.y, c.w, 38); });
+}
+
+function drawGround(){
+  groundX -= speed*1.25;
+  if (groundX <= -32) groundX += 32;
+  for (let x=groundX; x<W()+32; x+=32){ ctx.drawImage(T_GROUND, x, H()-GROUND_H, 32, GROUND_H); }
+  // ön çimen parıltıları
+  ctx.globalAlpha=0.08; ctx.fillStyle="#ffffff";
+  for (let i=0;i<6;i++) ctx.fillRect(((performance.now()/10+i*70)%W())|0, H()-GROUND_H+8, 2, 6);
+  ctx.globalAlpha=1;
+}
+
+function drawObstacles(){
+  obstacles.forEach(o=>{
+    if (o.type==='log'){ ctx.fillStyle="#8e5b2a"; }
+    else if (o.type==='bush'){ ctx.fillStyle="#27ae60"; }
+    else { ctx.fillStyle="#566573"; }
+    ctx.fillRect(o.x,o.y,o.w,o.h);
+    ctx.strokeStyle="rgba(0,0,0,.35)"; ctx.lineWidth=3; ctx.strokeRect(o.x,o.y,o.w,o.h);
+  });
+}
+
+function drawCoins(dt){
+  coins.forEach(c=>{
+    if (c.taken) return;
+    c.ftime += dt; if (c.ftime>80){ c.ftime=0; c.frame=(c.frame+1)%COIN.length; }
+    const s = c.scale;
+    ctx.drawImage(COIN[c.frame], c.x-32*s/2, c.y-32*s/2, 64*s,64*s);
+  });
+}
+
+function drawPowers(dt){
+  powers.forEach(pw=>{
+    pw.t += dt;
+    const s = pw.scale*(1+0.05*Math.sin(pw.t/180));
+    const img = (pw.kind==='shield')? ICON_SHIELD : ICON_MAGNET;
+    ctx.drawImage(img, pw.x-32*s/2, pw.y-32*s/2, 64*s,64*s);
+  });
+}
+
+function drawParticles(dt){
+  particles.forEach(pt=>{ pt.x+=pt.vx; pt.y+=pt.vy; pt.vy+=0.02; pt.life-=dt; ctx.globalAlpha = Math.max(0, pt.life/600); ctx.fillStyle=pt.col; ctx.fillRect(pt.x,pt.y,3,3); ctx.globalAlpha=1; });
+  particles = particles.filter(p=>p.life>0);
+}
+
+/* ========= ÇARPIŞMA ========= */
+function hitRect(o){ const rx=kapi.x, ry=kapi.y, rr=22; return (rx+rr>o.x && rx-rr<o.x+o.w && ry+rr>o.y && ry-rr<o.y+o.h); }
+function dist2(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return dx*dx+dy*dy; }
+
+/* ========= DÖNGÜ ========= */
 function loop(ts){
-  if(!last) last=ts;
-  var dt = ts - last; last = ts;
+  if (!last) last=ts;
+  const dt = Math.min(50, ts - last); last = ts;
 
-  if (running && !over){
+  if (running && !paused && !over){
     t += dt;
-    nextObs -= dt; if(nextObs<=0) spawnObstacle();
-    nextCoin -= dt; if(nextCoin<=0) spawnCoin();
 
-    for (var i=0;i<obstacles.length;i++) obstacles[i].x -= speed;
-    obstacles = obstacles.filter(function(o){ return o.x+o.w>-10; });
-    for (var j=0;j<coins.length;j++) coins[j].x -= speed;
-    coins = coins.filter(function(c){ return c.x>-20; });
+    // spawn
+    nextObs -= dt; if (nextObs<=0) spawnObstacle();
+    nextCoin -= dt; if (nextCoin<=0) spawnCoin();
+    nextPower -= dt; if (nextPower<=0) spawnPower();
 
-    score += speed*0.02; document.getElementById('score').textContent = Math.floor(score);
+    // hareket
+    obstacles.forEach(o=> o.x-=speed);
+    obstacles = obstacles.filter(o=> o.x+o.w>-12);
+    coins.forEach(c=> c.x-=speed);
+    coins = coins.filter(c=> c.x>-16);
+    powers.forEach(pw=> pw.x-=speed);
+    powers = powers.filter(pw=> pw.x>-20);
+
+    // coin mıknatıs etkisi
+    if (magnet>0){
+      coins.forEach(c=>{
+        const dx = kapi.x - c.x, dy = kapi.y - c.y;
+        const d2 = dx*dx+dy*dy;
+        if (d2 < 200*200){
+          c.x += dx*0.05; c.y += dy*0.05;
+        }
+      });
+      magnet -= dt; if (magnet<0) magnet=0;
+    }
+
+    // Kapi fizik
     kapi.step(dt);
 
-    for (var i2=0;i2<obstacles.length;i2++){
-      var o=obstacles[i2];
+    // skor & combo
+    score += speed*0.02;
+    comboTimer -= dt; if (comboTimer<=0) combo=1;
+    document.getElementById('score').textContent = Math.floor(score);
+    document.getElementById('combo').textContent = combo|0;
+
+    // çarpışmalar
+    for (const o of obstacles){
       if (hitRect(o)){
-        lives -= 1; document.getElementById('lives').textContent = lives;
-        o.x -= 40;
-        if (lives<=0){ endGame(); break; }
+        if (shield>0){ shield=0; toast("🛡️ Kalkan kırıldı!"); if(audioEnabled) hitS(); }
+        else {
+          lives -= 1; kapi.inv = 500; if(audioEnabled) hitS();
+          for(let i=0;i<16;i++) part(kapi.x,kapi.y,"#fff",R(-2,2),R(-2,0),600);
+          if (lives<=0){ endGame(); }
+        }
+        o.x -= 60;
+        document.getElementById('lives').textContent = Math.max(0,lives);
       }
     }
-    for (var j2=0;j2<coins.length;j2++){
-      var c=coins[j2];
-      if (!c.taken && hitCoin(c)){ c.taken=true; score += 5; }
+
+    for (const c of coins){
+      if (!c.taken && dist2(c,kapi) < (28*28)){
+        c.taken = true;
+        const add = 5*combo;
+        score += add;
+        combo = clamp(combo+0.2, 1, 5);
+        comboTimer = 1800; // 1.8s
+        for(let i=0;i<10;i++) part(c.x,c.y,"#ffd23f",R(-1,1),R(-2,0),500);
+        if(audioEnabled) bip2();
+      }
     }
-    speed += 0.0006*dt;
+
+    for (const pw of powers){
+      if (dist2(pw,kapi) < (30*30)){
+        if (pw.kind==='shield'){ shield = 6000; toast("🛡️ Kalkan aktif!"); }
+        else { magnet = 6000; toast("🧲 Mıknatıs aktif!"); }
+        pw.x = -999;
+        if(audioEnabled) bip1();
+      }
+    }
+
+    // zorluk artışı
+    speed += 0.0005*dt;
   }
 
-  ensureClouds(); drawBg(dt); drawGround(); drawCoins(dt); drawObs(); kapi.draw();
+  // ÇİZİM
+  ensureBackdrops();
+  drawBackground(dt);
+  drawGround();
+  drawCoins(dt);
+  drawPowers(dt);
+  drawObstacles();
+  drawParticles(dt);
+  kapi.draw();
+
   requestAnimationFrame(loop);
 }
 
-/* ======= 10) KONTROLLER ======= */
-function start(){
-  running=true; over=false; score=0; speed=3.0; lives=3;
-  obstacles=[]; coins=[]; nextObs=400; nextCoin=600; groundX=0; t=0; lastOnGround=0;
+/* ========= KONTROLLER ========= */
+function startGame(){
+  running=true; paused=false; over=false;
+  score=0; lives=3; combo=1; comboTimer=0; speed=3.2;
+  obstacles=[]; coins=[]; powers=[]; particles=[];
+  nextObs=400; nextCoin=600; nextPower=R(3000,6000);
+  groundX=0; t=0; lastOnGround=0; shield=0; magnet=0;
   resetKapi();
   document.getElementById('score').textContent="0";
   document.getElementById('lives').textContent="3";
-  var hint=document.getElementById('hint'); hint.style.display="none";
+  document.getElementById('combo').textContent="1";
+  document.getElementById('hint').style.display="none";
 }
 function endGame(){
-  over=true; running=false; best=Math.max(best,Math.floor(score));
-  var hint=document.getElementById('hint');
-  hint.textContent = "💥 Oyun bitti! Skor: " + Math.floor(score) + " • En iyi: " + best + "\nTekrar oynamak için Başlat.";
-  hint.style.display="block";
-  try{
-    if (tg && typeof tg.sendData === 'function'){
-      tg.sendData(JSON.stringify({ type:"runner_score", score: Math.floor(score) }));
-    }
-  }catch(e){}
+  over=true; running=false;
+  best = Math.max(best, Math.floor(score));
+  const msg = "💥 Oyun bitti! Skor: " + Math.floor(score) + " • En iyi: " + best + "\nTekrar için Başlat.";
+  const hint = document.getElementById('hint'); hint.textContent = msg; hint.style.display="block";
+  try{ if (tg && typeof tg.sendData==='function'){ tg.sendData(JSON.stringify({ type:"runner_score", score: Math.floor(score) })); } }catch(e){}
+}
+function togglePause(){
+  if (!running || over) return;
+  paused = !paused;
+  document.getElementById('btnPause').textContent = paused ? "▶️ Devam" : "⏸️ Duraklat";
+  toast(paused ? "Duraklatıldı" : "Devam");
 }
 function tap(ev){
-  // iOS dokunmatik uyumu
   try{ if (ev && typeof ev.preventDefault==='function') ev.preventDefault(); }catch(_){}
-  if (!running || over) start(); else kapi.flap();
+  if (!running || over){ startGame(); } else if (!paused){ kapi.flap(); }
 }
 
-/* Event binding (fallback'li) */
-(function bindControls(){
-  var btn = document.getElementById('btnStart');
-  if (btn) btn.addEventListener('click', function(){ start(); }, {passive:true});
-
-  var tapEvent = ('ontouchstart' in window) ? 'touchstart' : (window.PointerEvent ? 'pointerdown' : 'mousedown');
+/* ========= EVENTLER ========= */
+(function bind(){
+  const tapEvent = ('ontouchstart' in window) ? 'touchstart' : (window.PointerEvent ? 'pointerdown' : 'mousedown');
   cvs.addEventListener(tapEvent, tap, {passive:false});
-  document.addEventListener('keydown', function(e){ if (e.code==='Space') tap(e); });
+  document.addEventListener('keydown', e=>{
+    if (e.code==='Space') tap(e);
+    else if (e.code==='KeyP') togglePause();
+  });
+  document.getElementById('btnStart').addEventListener('click', ()=>{ startGame(); if(audioEnabled) bip1(); });
+  document.getElementById('btnPause').addEventListener('click', togglePause);
+  document.getElementById('btnSound').addEventListener('click', ()=>{
+    audioEnabled = !audioEnabled;
+    if (audioEnabled){ initAudio(); toast("🔊 Ses açık"); } else toast("🔇 Ses kapalı");
+  });
 })();
 
-/* ======= 11) BAŞLAT ======= */
+/* ========= BAŞLAT ========= */
 resetKapi();
 requestAnimationFrame(loop);
 </script>
