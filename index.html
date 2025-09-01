@@ -1,439 +1,160 @@
 <!doctype html>
-<html>
+<html lang="tr">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
-<title>Kapi Runner — Pro</title>
-<style>
-  html,body{margin:0;padding:0;background:#0d0f1f;height:100%;overflow:hidden;font-family:Inter,system-ui,Arial}
-  #top{position:fixed;left:0;right:0;top:0;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;color:#fff;z-index:10}
-  .row{display:flex;align-items:center;gap:8px}
-  .pill{background:rgba(255,255,255,.12);border-radius:999px;padding:6px 10px}
-  .btn{background:#6c5ce7;border:0;color:#fff;padding:8px 12px;border-radius:10px}
-  .btn.secondary{background:#3b3f6f}
-  #hint{position:fixed;left:50%;top:56%;transform:translate(-50%,-50%);color:#fff;opacity:.96;font-size:15px;text-align:center;z-index:8;white-space:pre-line}
-  #toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:rgba(0,0,0,.65);color:#fff;padding:8px 12px;border-radius:10px;display:none;z-index:11}
-  canvas{display:block;touch-action:none}
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Okapi Altın Avcısı</title>
+  <style>
+    html,body{margin:0;height:100%;background:#0f0b14;color:#fff;font-family:system-ui,Segoe UI,Arial}
+    .wrap{display:flex;flex-direction:column;align-items:center;gap:8px;padding:10px}
+    #hud{display:flex;gap:12px;align-items:center}
+    .pill{padding:6px 10px;border:1px solid #3a2f46;border-radius:999px;background:#1a1323}
+    canvas{background:#18111e;border:1px solid #32273d;border-radius:12px;touch-action:manipulation}
+    button{padding:8px 12px;border-radius:10px;border:1px solid #3a2f46;background:#241b30;color:#fff;cursor:pointer}
+  </style>
+  <!-- Telegram Mini App JS -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
-<div id="top">
-  <div class="row">
-    <div class="pill">❤️ <span id="lives">3</span></div>
+<div class="wrap">
+  <div id="hud">
+    <div class="pill">⏱ <span id="time">0</span>s</div>
     <div class="pill">⭐ <span id="score">0</span></div>
-    <div class="pill">x<span id="combo">1</span></div>
-    <button id="btnHitbox" class="btn secondary">⚙️ Hitbox</button>
+    <div class="pill">🎯 tıkla: kancayı fırlat</div>
   </div>
-  <div class="row">
-    <button id="btnPause" class="btn secondary">⏸️ Duraklat</button>
-    <button id="btnStart" class="btn">Başlat</button>
+  <canvas id="game" width="480" height="640"></canvas>
+  <div id="after" style="display:none">
+    <div style="margin:6px 0">Skorun: <b id="finalScore">0</b></div>
+    <button id="again">Tekrar Oyna</button>
   </div>
 </div>
-<div id="hint">Dokun / Space: Zıpla ⬆️
-Net çarpışma, kaliteli Kapi ve parallax sahne.</div>
-<div id="toast"></div>
-<canvas id="game"></canvas>
 
 <script>
-/* ---------- DEBUG HATA EKRANI ---------- */
-window.onerror = function (m) {
-  var el = document.getElementById('hint');
-  if (el) { el.textContent = 'Hata: ' + m; el.style.display='block'; }
-};
+/* ========== 0) Ayarlar ========== */
+const API_URL = "https://SENIN-API-ADRESIN.do.app"; // <— BUNU kendi API servis URL’in ile değiştir
 
-/* ---------- TELEGRAM WEBAPP (iOS uyumlu) ---------- */
-var tg = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
-try { if (tg && typeof tg.expand === 'function') tg.expand(); } catch (e) {}
-
-/* ---------- CANVAS KURULUMU ---------- */
-var cvs = document.getElementById("game");
-var ctx = cvs.getContext("2d");
-function fit(){
-  var w = Math.min(window.innerWidth, 480);
-  var h = Math.min(window.innerHeight, 860);
-  var dpr = window.devicePixelRatio || 1;
-  cvs.style.width = w+"px"; cvs.style.height = h+"px";
-  cvs.width = Math.floor(w*dpr); cvs.height = Math.floor(h*dpr);
-  ctx.setTransform(dpr,0,0,dpr,0,0);
-  ctx.imageSmoothingEnabled = true;
-}
-fit(); window.addEventListener("resize", fit);
-function W(){ return cvs.clientWidth; }
-function H(){ return cvs.clientHeight; }
-
-/* ---------- OYUN DURUMU ---------- */
-var running=false, paused=false, over=false, showHitbox=false;
-var score=0, best=0, lives=3, combo=1, comboTimer=0;
-var speed=3.0, t=0, groundX=0, shake=0;
-var last=0, nextObs=600, nextCoin=400, lastOnGround=0;
-var G=0.55, JUMP=-10.2, COYOTE=110, GROUND_H=86;
-var SPAWN_OBS=[900,1400], SPAWN_COIN=[500,900];
-
-var kapi, coins=[], obstacles=[], clouds=[], trees=[], mountains=[], stars=[], particles=[];
-
-/* ---------- YARDIMCILAR ---------- */
-function R(a,b){ return a + Math.random()*(b-a); }
-function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
-function toast(s){ var el=document.getElementById('toast'); el.textContent=s; el.style.display='block'; setTimeout(function(){el.style.display='none';}, 1200); }
-
-/* ---------- KALİTELİ ÇİZİMLER (Vektör) ---------- */
-function gradient(ctx, x0,y0,x1,y1,stops){
-  var g=ctx.createLinearGradient(x0,y0,x1,y1);
-  for (var i=0;i<stops.length;i++){ g.addColorStop(stops[i][0], stops[i][1]); }
-  return g;
-}
-
-/* --- KAPI (okapi) vektör çizim: belirgin kontur + şeritler + yüz --- */
-function drawKapiBody(ctx, x, y, s, frame){
-  ctx.save(); ctx.translate(x,y); ctx.scale(s,s);
-  // gölge
-  ctx.globalAlpha=0.25; ctx.fillStyle="#000"; ctx.beginPath();
-  ctx.ellipse(0,32,22,8,0,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
-
-  // gövde
-  ctx.fillStyle="#8a5b34"; ctx.strokeStyle="#3d2918"; ctx.lineWidth=2.2;
-  ctx.beginPath(); ctx.roundRect(-26,-2,46,30,10); ctx.fill(); ctx.stroke();
-
-  // karın
-  ctx.fillStyle="#c89b6a"; ctx.strokeStyle="#6b4727";
-  ctx.beginPath(); ctx.roundRect(-12,4,22,16,6); ctx.fill(); ctx.stroke();
-
-  // arka şeritler (okapi bacak çizgileri)
-  ctx.fillStyle="#1d1d1d";
-  ctx.fillRect(-18,18,6,8); ctx.fillRect(-8,18,6,8); ctx.fillRect(2,18,6,8);
-
-  // kafa
-  ctx.fillStyle="#8a5b34"; ctx.strokeStyle="#3d2918";
-  ctx.beginPath(); ctx.roundRect(16,-12,18,18,6); ctx.fill(); ctx.stroke();
-
-  // kulak (sağ)
-  ctx.fillStyle="#a87346"; ctx.strokeStyle="#3d2918";
-  ctx.beginPath(); ctx.ellipse(28,-16,6,7,0,0,Math.PI*2); ctx.fill(); ctx.stroke();
-  // kulak (sol küçük)
-  ctx.beginPath(); ctx.ellipse(22,-15,5,6,0,0,Math.PI*2); ctx.fill(); ctx.stroke();
-
-  // yüz maskesi (okapi)
-  ctx.fillStyle="#caa681"; ctx.beginPath();
-  ctx.moveTo(28,-8); ctx.quadraticCurveTo(34,-6,32,-1); ctx.quadraticCurveTo(24,2,20,-2); ctx.quadraticCurveTo(24,-8,28,-8);
-  ctx.fill(); ctx.stroke();
-
-  // göz (blink: frame%30==0 ile kapat)
-  ctx.fillStyle="#111";
-  if (frame%30===0){ ctx.fillRect(30,-4,8,2); }
-  else {
-    ctx.beginPath(); ctx.arc(31,-4,2,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle="#fff"; ctx.fillRect(30.5,-4.8,1.2,1.2);
-  }
-
-  // atkı
-  ctx.fillStyle="#e74c3c"; ctx.strokeStyle="#8b2b24";
-  ctx.beginPath(); ctx.roundRect(-18,-6,24,6,3); ctx.fill(); ctx.stroke();
-  var wave = [ -6,-3,0,-4,-1,-5 ][frame%6];
-  ctx.beginPath(); ctx.roundRect(-30,-6+wave,12,6,3); ctx.fill(); ctx.stroke();
-
-  // kanat (hareket)
-  ctx.fillStyle="#f3c97a"; ctx.strokeStyle="#8c6b1c";
-  var wing = [ -4,0,4,2,4,0 ][frame%6];
-  ctx.beginPath(); ctx.roundRect(-14,6+wing,16,8,4); ctx.fill(); ctx.stroke();
-
-  // bacaklar
-  ctx.fillStyle="#5d3b1a";
-  var la=[0,2,5,2,0,2][frame%6], lb=[6,3,0,3,6,3][frame%6];
-  ctx.fillRect(-8,24,4,8+la); ctx.fillRect(2,24,4,8+lb);
-
-  ctx.restore();
-}
-
-/* --- COIN (parıltı) --- */
-function drawCoin(ctx,x,y,scale,frame){
-  ctx.save(); ctx.translate(x,y); ctx.scale(scale,scale);
-  var a = (frame%40)/40 * Math.PI*2;
-  ctx.rotate(a*0.15);
-  var g=gradient(ctx,-12,-12,12,12,[[0,"#ffe074"],[1,"#ffbf2b"]]);
-  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(0,0,12,0,Math.PI*2); ctx.fill();
-  ctx.fillStyle="#fff8"; ctx.fillRect(-2,-10,4,20);
-  ctx.restore();
-}
-
-/* --- ENGELLER: belirgin silüetler --- */
-function drawLog(ctx,x,y,w,h){ // kütük
-  ctx.save(); ctx.translate(x,y);
-  ctx.fillStyle="#8e5b2a"; ctx.strokeStyle="#3d2918"; ctx.lineWidth=2;
-  ctx.beginPath(); ctx.roundRect(0,0,w,h,8); ctx.fill(); ctx.stroke();
-  ctx.restore();
-}
-function drawRock(ctx,x,y,w,h){ // kaya
-  ctx.save(); ctx.translate(x,y);
-  ctx.fillStyle="#5f6a72"; ctx.strokeStyle="#2c3e50"; ctx.lineWidth=2;
-  ctx.beginPath(); ctx.moveTo(6,h); ctx.lineTo(w*0.3,4); ctx.lineTo(w*0.8,10); ctx.lineTo(w-4,h-2); ctx.closePath(); ctx.fill(); ctx.stroke();
-  ctx.restore();
-}
-function drawSpike(ctx,x,y,w,h){ // diken/çalı
-  ctx.save(); ctx.translate(x,y);
-  ctx.fillStyle="#1e8449"; ctx.strokeStyle="#0b4826"; ctx.lineWidth=2;
-  ctx.beginPath(); ctx.moveTo(0,h); ctx.lineTo(w*0.2,0); ctx.lineTo(w*0.4,h); ctx.lineTo(w*0.6,0); ctx.lineTo(w*0.8,h); ctx.lineTo(w,h*0.1); ctx.lineTo(w,h); ctx.closePath();
-  ctx.fill(); ctx.stroke();
-  ctx.restore();
-}
-
-/* --- ARKA PLAN KATLARI --- */
-function drawSky(){
-  var g=ctx.createLinearGradient(0,0,0,H());
-  g.addColorStop(0,"#141b3a"); g.addColorStop(1,"#0d0f1f");
-  ctx.fillStyle=g; ctx.fillRect(0,0,W(),H());
-}
-function ensureBackdrops(){
-  if (stars.length<10) stars.push({x:R(0,W()), y:R(0,H()*0.6), s:R(.05,.12)});
-  if (mountains.length<4) mountains.push({x:R(0,W()), y:H()-GROUND_H-150, w:R(220,320), s:R(.12,.2)});
-  if (trees.length<7) trees.push({x:R(0,W()), y:H()-GROUND_H-90, w:R(70,110), s:R(.3,.5)});
-  if (clouds.length<6) clouds.push({x:R(0,W()), y:R(20,H()-GROUND_H-200), w:R(70,140), s:R(.2,.5)});
-}
-function drawBackdrops(dt){
-  // yıldızlar
-  ctx.fillStyle="#fff";
-  for (var i=0;i<stars.length;i++){
-    var s=stars[i]; s.x -= s.s*0.3; if (s.x<-2) s.x=W()+2;
-    ctx.fillRect(s.x|0, s.y|0, 1, 1);
-  }
-  // dağlar
-  for (var m=0;m<mountains.length;m++){
-    var a=mountains[m]; a.x -= a.s*0.7; if (a.x<-a.w) a.x=W()+a.w;
-    ctx.fillStyle="#1b2a4a"; ctx.fillRect(a.x, a.y, a.w, a.w*0.5);
-  }
-  // ağaçlar
-  for (var j=0;j<trees.length;j++){
-    var t=trees[j]; t.x -= t.s*0.9; if (t.x<-t.w) t.x=W()+t.w;
-    ctx.fillStyle="#1d6b3b"; ctx.fillRect(t.x, t.y, t.w, t.w*1.2);
-  }
-  // bulutlar
-  for (var c=0;c<clouds.length;c++){
-    var cl=clouds[c]; cl.x -= cl.s*speed*0.7; if (cl.x<-cl.w){ cl.x=W()+cl.w; cl.y=R(20,H()-GROUND_H-200); }
-    ctx.fillStyle="#fff"; ctx.globalAlpha=0.85;
-    ctx.beginPath(); ctx.ellipse(cl.x, cl.y, cl.w*0.5, 18, 0, 0, Math.PI*2); ctx.fill();
-    ctx.globalAlpha=1;
-  }
-}
-function drawGround(){
-  groundX -= speed*1.2; if (groundX<=-36) groundX += 36;
-  // toprak
-  ctx.fillStyle="#73491e"; ctx.fillRect(0, H()-GROUND_H, W(), GROUND_H);
-  // çimen taraması
-  ctx.fillStyle="#2ecc71";
-  for (var x=groundX; x<W()+36; x+=36){ ctx.fillRect(x, H()-GROUND_H, 28, 7); }
-  // ön çizgi
-  ctx.fillStyle="#1e8449"; ctx.fillRect(0, H()-GROUND_H+7, W(), 3);
-}
-
-/* ---------- NESNELER ---------- */
-function resetKapi(){
-  kapi = {
-    x: 96, y: H()-GROUND_H-54, vy: 0, onGround:true,
-    frame:0, ftime:0, scale:2.2, inv:0, ring:0,
-    flap: function(){
-      var now = performance.now();
-      if (this.onGround || (now-lastOnGround)<COYOTE){ this.vy=JUMP; this.onGround=false; }
-    },
-    step: function(dt){
-      this.vy += G; this.y += this.vy;
-      var floor = H()-GROUND_H-54;
-      if (this.y >= floor){ this.y=floor; this.vy=0; if(!this.onGround) lastOnGround=performance.now(); this.onGround=true; }
-      this.ftime += dt; if (this.ftime>70){ this.ftime=0; this.frame=(this.frame+1)%60; } // 60fps bazlı anim
-      if (this.inv>0) this.inv -= dt;
-      if (this.ring>0) this.ring -= dt;
-    },
-    draw: function(){
-      // vurulma halkası
-      if (this.ring>0){
-        ctx.save();
-        var r = 30 + (400-this.ring)/8;
-        ctx.globalAlpha = Math.max(0, this.ring/400);
-        ctx.beginPath(); ctx.arc(this.x, this.y+6, r, 0, Math.PI*2);
-        ctx.strokeStyle="rgba(255,255,255,0.8)"; ctx.lineWidth=2; ctx.stroke();
-        ctx.restore();
-      }
-      // inv flaşı
-      if (this.inv>0){ ctx.globalAlpha = 0.6+0.4*Math.sin(performance.now()/40); }
-      drawKapiBody(ctx, this.x, this.y, this.scale, this.frame);
-      ctx.globalAlpha = 1;
-      // hitbox
-      if (showHitbox){
-        ctx.strokeStyle="#00ffe0"; ctx.strokeRect(this.x-22, this.y-22, 44, 44);
-        ctx.beginPath(); ctx.arc(this.x, this.y, 20, 0, Math.PI*2); ctx.stroke();
-      }
-    }
-  };
-}
-function spawnObstacle(){
-  var t = Math.random()<0.33 ? 'log' : (Math.random()<0.5 ? 'rock' : 'spike');
-  var h, w, y=0;
-  if (t==='log'){ w=52; h=26; y=H()-GROUND_H-h; }
-  else if (t==='rock'){ w=38; h=42; y=H()-GROUND_H-h; }
-  else { w=40; h=50; y=H()-GROUND_H-h; }
-  obstacles.push({x:W()+40,y:y,w:w,h:h,type:t,flash:0});
-  nextObs = R(SPAWN_OBS[0], SPAWN_OBS[1]);
-}
-function spawnCoin(){
-  coins.push({x:W()+30, y:H()-GROUND_H - R(70,150), r:12, scale:1.7, frame:0, taken:false});
-  nextCoin = R(SPAWN_COIN[0], SPAWN_COIN[1]);
-}
-
-/* ---------- ÇARPIŞMA ---------- */
-function hitRect(o){ // kapsül/daire benzeri basit kontrol: merkez + yarıçap
-  var rx=kapi.x, ry=kapi.y, rr=20;
-  return (rx+rr>o.x && rx-rr<o.x+o.w && ry+rr>o.y && ry-rr<o.y+o.h);
-}
-function dist2(a,b){ var dx=a.x-b.x, dy=a.y-b.y; return dx*dx+dy*dy; }
-
-/* ---------- PARÇACIK ---------- */
-function part(x,y,col,vx,vy,life){ particles.push({x:x,y:y,col:col,vx:vx,vy:vy,life:life}); }
-function drawParticles(dt){
-  for (var i=0;i<particles.length;i++){
-    var p=particles[i]; p.x+=p.vx; p.y+=p.vy; p.vy+=0.02; p.life-=dt;
-    ctx.globalAlpha = Math.max(0, p.life/600); ctx.fillStyle=p.col; ctx.fillRect(p.x,p.y,3,3);
-    ctx.globalAlpha=1;
-  }
-  particles = particles.filter(function(p){ return p.life>0; });
-}
-
-/* ---------- ÇİZİM DÖNGÜSÜ ---------- */
-function renderScene(dt){
-  // ekran sarsıntısı
-  if (shake>0){ shake -= dt; var sx = (Math.random()*2-1)*3, sy=(Math.random()*2-1)*3; ctx.save(); ctx.translate(sx, sy); }
-  drawSky();
-  ensureBackdrops();
-  drawBackdrops(dt);
-  drawGround();
-
-  // paralar
-  for (var i=0;i<coins.length;i++){
-    var c=coins[i]; if (c.taken) continue;
-    c.frame += dt; drawCoin(ctx, c.x, c.y, c.scale, c.frame);
-    if (showHitbox){ ctx.strokeStyle="#ffd23f"; ctx.beginPath(); ctx.arc(c.x,c.y,14,0,Math.PI*2); ctx.stroke(); }
-  }
-
-  // engeller
-  for (var j=0;j<obstacles.length;j++){
-    var o=obstacles[j];
-    if (o.type==='log') drawLog(ctx,o.x,o.y,o.w,o.h);
-    else if (o.type==='rock') drawRock(ctx,o.x,o.y,o.w,o.h);
-    else drawSpike(ctx,o.x,o.y,o.w,o.h);
-    if (o.flash>0){
-      ctx.save(); ctx.globalAlpha=o.flash/300; ctx.strokeStyle="#fff"; ctx.lineWidth=3; ctx.strokeRect(o.x-2,o.y-2,o.w+4,o.h+4); ctx.restore();
-      o.flash -= dt;
-    }
-    if (showHitbox){ ctx.strokeStyle="#ff5c5c"; ctx.strokeRect(o.x,o.y,o.w,o.h); }
-  }
-
-  // kapi
-  kapi.draw();
-
-  // parçacıklar
-  drawParticles(dt);
-
-  if (shake>0){ ctx.restore(); }
-}
-
-/* ---------- OYUN DÖNGÜSÜ ---------- */
-function loop(ts){
-  if(!last) last=ts;
-  var dt = Math.min(50, ts-last); last=ts;
-
-  if (running && !paused && !over){
-    t += dt;
-    // spawn
-    nextObs -= dt; if (nextObs<=0) spawnObstacle();
-    nextCoin -= dt; if (nextCoin<=0) spawnCoin();
-
-    // hareket
-    for (var i=0;i<obstacles.length;i++) obstacles[i].x -= speed;
-    obstacles = obstacles.filter(function(o){ return o.x+o.w>-12; });
-    for (var j=0;j<coins.length;j++) coins[j].x -= speed;
-    coins = coins.filter(function(c){ return c.x>-20; });
-
-    // kapi fizik
-    kapi.step(dt);
-
-    // puan & combo
-    score += speed*0.02;
-    comboTimer -= dt; if (comboTimer<=0) combo=1;
-    document.getElementById('score').textContent = Math.floor(score);
-    document.getElementById('combo').textContent = combo|0;
-
-    // coin çarpışma
-    for (var c=0;c<coins.length;c++){
-      var coin = coins[c]; if (coin.taken) continue;
-      if (dist2({x:kapi.x,y:kapi.y},{x:coin.x,y:coin.y}) < (26*26)){
-        coin.taken = true;
-        for (var n=0;n<10;n++) part(coin.x, coin.y, "#ffd23f", R(-1,1), R(-2,0), 500);
-        var add = 5*combo; score += add; combo = clamp(combo+0.25, 1, 5); comboTimer = 2000;
-      }
-    }
-
-    // engel çarpışma
-    for (var o=0;o<obstacles.length;o++){
-      var ob = obstacles[o];
-      if (hitRect(ob)){
-        if (kapi.inv<=0){
-          lives -= 1; kapi.inv=600; kapi.ring=400; shake=250; ob.flash=300;
-          for (var n=0;n<16;n++) part(kapi.x,kapi.y,"#fff",R(-2,2),R(-2,0),600);
-          document.getElementById('lives').textContent = Math.max(0,lives);
-          if (lives<=0){ endGame(); break; }
-        }
-        ob.x -= 60; // geri it
-      }
-    }
-
-    // zorluk
-    speed += 0.00045*dt;
-  }
-
-  renderScene(dt);
-  requestAnimationFrame(loop);
-}
-
-/* ---------- KONTROLLER ---------- */
-function startGame(){
-  running=true; paused=false; over=false;
-  score=0; lives=3; combo=1; comboTimer=0; speed=3.0; groundX=0; shake=0;
-  coins=[]; obstacles=[]; particles=[];
-  nextObs=450; nextCoin=600; t=0; lastOnGround=0;
-  resetKapi();
-  document.getElementById('score').textContent="0";
-  document.getElementById('lives').textContent="3";
-  document.getElementById('combo').textContent="1";
-  document.getElementById('hint').style.display="none";
-}
-function endGame(){
-  over=true; running=false;
-  best = Math.max(best, Math.floor(score));
-  var msg = "💥 Oyun bitti! Skor: " + Math.floor(score) + " • En iyi: " + best + "\nTekrar için Başlat.";
-  var hint=document.getElementById('hint'); hint.textContent=msg; hint.style.display="block";
-  try{ if (tg && typeof tg.sendData==='function'){ tg.sendData(JSON.stringify({ type:"runner_score", score: Math.floor(score) })); } }catch(e){}
-}
-function togglePause(){
-  if (!running || over) return;
-  paused = !paused;
-  document.getElementById('btnPause').textContent = paused ? "▶️ Devam" : "⏸️ Duraklat";
-  toast(paused ? "Duraklatıldı" : "Devam");
-}
-function tap(ev){
-  try{ if (ev && typeof ev.preventDefault==='function') ev.preventDefault(); }catch(_){}
-  if (!running || over){ startGame(); } else if (!paused){ kapi.flap(); }
-}
-
-/* ---------- EVENTLER ---------- */
-(function bind(){
-  var tapEvent = ('ontouchstart' in window) ? 'touchstart' : (window.PointerEvent ? 'pointerdown' : 'mousedown');
-  cvs.addEventListener(tapEvent, tap, {passive:false});
-  document.addEventListener('keydown', function(e){ if (e.code==='Space') tap(e); else if (e.code==='KeyP') togglePause(); else if (e.code==='KeyH'){ showHitbox=!showHitbox; } });
-  document.getElementById('btnStart').addEventListener('click', function(){ startGame(); });
-  document.getElementById('btnPause').addEventListener('click', togglePause);
-  document.getElementById('btnHitbox').addEventListener('click', function(){ showHitbox=!showHitbox; toast(showHitbox?"Hitbox: Açık":"Hitbox: Kapalı"); });
+/* ========== 1) Telegram Mini App Kimliği ========== */
+(function initTelegram(){
+  const tg = window.Telegram?.WebApp;
+  tg?.expand();
+  tg?.enableClosingConfirmation();
+  const tgid = tg?.initDataUnsafe?.user?.id || 0; // Telegram içinden gelmediyse 0 olur
+  window.__OKAPI__ = { tgid };
 })();
 
-/* ---------- BAŞLAT ---------- */
-resetKapi();
-requestAnimationFrame(loop);
+/* ========== 2) Basit oyun durumu ========== */
+const cvs = document.getElementById('game');
+const ctx = cvs.getContext('2d');
+const HUDtime = document.getElementById('time');
+const HUDscore = document.getElementById('score');
+const after = document.getElementById('after');
+const finalScore = document.getElementById('finalScore');
+const againBtn = document.getElementById('again');
+
+const W=480, H=640;
+const ORX=240, ORY=100;        // kancanın çıktığı nokta
+const MIN=-70*Math.PI/180, MAX=70*Math.PI/180;
+const ANG_SPEED=90*Math.PI/180; // salınım hız (deg/s)
+const ROPE_SPEED=320;           // piksel/s (sadece animasyon)
+
+let duration=60;         // sunucudan gelecek
+let startedAt=0;         // epoch ms
+let timeLeft=0;
+let angle=0, dir=1;
+let firing=false, ropeLen=0;
+let taps=[];             // tıklama zamanları (ms)
+
+let loopId=null, timerId=null, ended=false;
+
+/* ========== 3) API'den süreyi al ========== */
+async function startGame(){
+  try{
+    const r = await fetch(API_URL + "/rope/start");
+    const d = await r.json();
+    duration = d.duration_sec || 60;
+  }catch(e){ console.error(e); duration = 60; }
+  timeLeft = duration;
+  startedAt = Date.now();
+  HUDtime.textContent = timeLeft;
+
+  loopId = requestAnimationFrame(loop);
+  timerId = setInterval(()=> {
+    if(timeLeft>0){ timeLeft--; HUDtime.textContent = timeLeft; }
+    if(timeLeft<=0 && !ended){ finishGame(); }
+  }, 1000);
+}
+
+/* ========== 4) Oyun döngüsü ========== */
+let last = performance.now();
+function loop(ts){
+  const dt = (ts-last)/1000; last = ts;
+  update(dt); draw();
+  loopId = requestAnimationFrame(loop);
+}
+
+function update(dt){
+  if(ended) return;
+  if(!firing){
+    let a = angle + dir*ANG_SPEED*dt;
+    if(a>MAX){ a=MAX; dir=-1; }
+    if(a<MIN){ a=MIN; dir=1; }
+    angle = a;
+  }else{
+    ropeLen += ROPE_SPEED*dt;
+    // duvara/zemine çarpınca (client animasyonu), geri sar
+    if(ORY + Math.sin(angle)*ropeLen >= 560 || ORX + Math.cos(angle)*ropeLen <= 0 || ORX + Math.cos(angle)*ropeLen >= W){
+      firing=false; ropeLen=0;
+    }
+  }
+}
+
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  // gökyüzü & zemin
+  ctx.fillStyle="#2e2335"; ctx.fillRect(0,0,W,160);
+  ctx.fillStyle="#5b3a26"; ctx.fillRect(0,160,W,H-160);
+  // Kapi placeholder
+  ctx.fillStyle="#fff"; ctx.font="16px system-ui";
+  ctx.fillText("🧣 Kapi", ORX-20, ORY-16);
+  // ip
+  ctx.strokeStyle="#ddd"; ctx.lineWidth=2;
+  const ex = ORX + Math.cos(angle)*(firing? ropeLen: 32);
+  const ey = ORY + Math.sin(angle)*(firing? ropeLen: 32);
+  ctx.beginPath(); ctx.moveTo(ORX,ORY); ctx.lineTo(ex,ey); ctx.stroke();
+  ctx.beginPath(); ctx.arc(ex,ey,6,0,Math.PI*2); ctx.fillStyle="#ccc"; ctx.fill();
+}
+
+/* ========== 5) Etkileşim ========== */
+cvs.addEventListener('click', ()=>{
+  if(ended || timeLeft<=0) return;
+  if(!firing){ firing=true; setTimeout(()=>{ firing=false; ropeLen=0; }, 800); }
+  const ms = Date.now() - startedAt;
+  taps.push(ms);
+});
+againBtn.addEventListener('click', ()=> location.reload());
+
+/* ========== 6) Bitince skoru sunucudan iste ========== */
+async function finishGame(){
+  ended = true;
+  try{
+    const body = {
+      telegram_id: window.__OKAPI__.tgid,
+      taps_ms: taps,
+      started_at: startedAt
+    };
+    const r = await fetch(API_URL + "/rope/submit", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(body)
+    });
+    const d = await r.json();
+    HUDscore.textContent = d.score ?? 0;
+    finalScore.textContent = d.score ?? 0;
+  }catch(e){ console.error(e); }
+  cancelAnimationFrame(loopId); clearInterval(timerId);
+  after.style.display = "block";
+}
+
+startGame();
 </script>
 </body>
 </html>
