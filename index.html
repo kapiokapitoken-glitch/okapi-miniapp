@@ -1,459 +1,437 @@
 <!doctype html>
 <html>
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
-<title>Kapi Runner — Clean Visuals</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+<title>Kapi Runner — Pro</title>
 <style>
-  html,body{margin:0;padding:0;background:#0a0e1a;height:100%;overflow:hidden;font-family:system-ui,Arial}
-  #bar{position:fixed;inset:0 0 auto 0;display:flex;justify-content:space-between;align-items:center;padding:8px 12px;color:#fff;z-index:5}
-  .left{display:flex;gap:8px;align-items:center}
+  html,body{margin:0;padding:0;background:#0d0f1f;height:100%;overflow:hidden;font-family:Inter,system-ui,Arial}
+  #top{position:fixed;left:0;right:0;top:0;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;color:#fff;z-index:10}
+  .row{display:flex;align-items:center;gap:8px}
   .pill{background:rgba(255,255,255,.12);border-radius:999px;padding:6px 10px}
-  .btn{background:#5964ff;border:0;color:#fff;padding:8px 12px;border-radius:10px}
-  .btn.secondary{background:#313760}
-  #hint{position:fixed;left:50%;top:55%;transform:translate(-50%,-50%);color:#fff;font-size:15px;text-align:center;z-index:4;white-space:pre-line;opacity:.95}
-  #toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:rgba(0,0,0,.6);color:#fff;padding:8px 12px;border-radius:10px;display:none;z-index:6}
+  .btn{background:#6c5ce7;border:0;color:#fff;padding:8px 12px;border-radius:10px}
+  .btn.secondary{background:#3b3f6f}
+  #hint{position:fixed;left:50%;top:56%;transform:translate(-50%,-50%);color:#fff;opacity:.96;font-size:15px;text-align:center;z-index:8;white-space:pre-line}
+  #toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:rgba(0,0,0,.65);color:#fff;padding:8px 12px;border-radius:10px;display:none;z-index:11}
   canvas{display:block;touch-action:none}
 </style>
 </head>
 <body>
-<div id="bar">
-  <div class="left">
+<div id="top">
+  <div class="row">
     <div class="pill">❤️ <span id="lives">3</span></div>
     <div class="pill">⭐ <span id="score">0</span></div>
     <div class="pill">x<span id="combo">1</span></div>
-    <button id="btnHitbox" class="btn secondary" title="Hitboxları göster/gizle">🔲 Hitbox</button>
-    <button id="btnSound" class="btn secondary" title="Sesi aç/kapat">🔈 Ses</button>
+    <button id="btnHitbox" class="btn secondary">⚙️ Hitbox</button>
   </div>
-  <div class="left">
+  <div class="row">
     <button id="btnPause" class="btn secondary">⏸️ Duraklat</button>
     <button id="btnStart" class="btn">Başlat</button>
   </div>
 </div>
 <div id="hint">Dokun / Space: Zıpla ⬆️
-Net hitbox’lar ve temiz görsellerle oyna.
-Coin topla, engellerden kaç!</div>
+Net çarpışma, kaliteli Kapi ve parallax sahne.</div>
 <div id="toast"></div>
-<canvas id="cv"></canvas>
+<canvas id="game"></canvas>
 
 <script>
-/* ------------------ Hata ekranı (debug) ------------------ */
+/* ---------- DEBUG HATA EKRANI ---------- */
 window.onerror = function (m) {
-  const el = document.getElementById('hint');
+  var el = document.getElementById('hint');
   if (el) { el.textContent = 'Hata: ' + m; el.style.display='block'; }
 };
 
-/* ------------------ Telegram WebApp (iOS uyumlu) ------------------ */
+/* ---------- TELEGRAM WEBAPP (iOS uyumlu) ---------- */
 var tg = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
 try { if (tg && typeof tg.expand === 'function') tg.expand(); } catch (e) {}
 
-/* ------------------ Canvas kurulum ------------------ */
-const cv = document.getElementById('cv');
-const cx = cv.getContext('2d');
+/* ---------- CANVAS KURULUMU ---------- */
+var cvs = document.getElementById("game");
+var ctx = cvs.getContext("2d");
 function fit(){
-  const w = Math.min(innerWidth, 480);
-  const h = Math.min(innerHeight, 840);
-  const d = devicePixelRatio || 1;
-  cv.style.width = w+'px'; cv.style.height = h+'px';
-  cv.width = Math.floor(w*d); cv.height = Math.floor(h*d);
-  cx.setTransform(d,0,0,d,0,0);
-  cx.imageSmoothingEnabled = true; cx.imageSmoothingQuality = 'high';
+  var w = Math.min(window.innerWidth, 480);
+  var h = Math.min(window.innerHeight, 860);
+  var dpr = window.devicePixelRatio || 1;
+  cvs.style.width = w+"px"; cvs.style.height = h+"px";
+  cvs.width = Math.floor(w*dpr); cvs.height = Math.floor(h*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.imageSmoothingEnabled = true;
 }
-fit(); addEventListener('resize', fit);
-const W = ()=>cv.clientWidth, H = ()=>cv.clientHeight;
+fit(); window.addEventListener("resize", fit);
+function W(){ return cvs.clientWidth; }
+function H(){ return cvs.clientHeight; }
 
-/* ------------------ Ses ------------------ */
-let audioEnabled=false, AC, bipCoin, bipJump, hitS;
-function initAudio(){
-  try{
-    if (AC) return;
-    AC = new (window.AudioContext||window.webkitAudioContext)();
-    const tone=(f,d,type='sine',g=0.06)=>{
-      const o=AC.createOscillator(), gn=AC.createGain();
-      o.type=type; o.frequency.value=f; gn.gain.value=g;
-      o.connect(gn); gn.connect(AC.destination);
-      o.start(); o.stop(AC.currentTime+d);
-    };
-    bipCoin=()=>tone(1320,0.05,'square',0.05);
-    bipJump=()=>tone(880,0.06,'square',0.05);
-    hitS=()=>tone(120,0.12,'sawtooth',0.07);
-  }catch(e){ audioEnabled=false; }
+/* ---------- OYUN DURUMU ---------- */
+var running=false, paused=false, over=false, showHitbox=false;
+var score=0, best=0, lives=3, combo=1, comboTimer=0;
+var speed=3.0, t=0, groundX=0, shake=0;
+var last=0, nextObs=600, nextCoin=400, lastOnGround=0;
+var G=0.55, JUMP=-10.2, COYOTE=110, GROUND_H=86;
+var SPAWN_OBS=[900,1400], SPAWN_COIN=[500,900];
+
+var kapi, coins=[], obstacles=[], clouds=[], trees=[], mountains=[], stars=[], particles=[];
+
+/* ---------- YARDIMCILAR ---------- */
+function R(a,b){ return a + Math.random()*(b-a); }
+function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+function toast(s){ var el=document.getElementById('toast'); el.textContent=s; el.style.display='block'; setTimeout(function(){el.style.display='none';}, 1200); }
+
+/* ---------- KALİTELİ ÇİZİMLER (Vektör) ---------- */
+function gradient(ctx, x0,y0,x1,y1,stops){
+  var g=ctx.createLinearGradient(x0,y0,x1,y1);
+  for (var i=0;i<stops.length;i++){ g.addColorStop(stops[i][0], stops[i][1]); }
+  return g;
 }
 
-/* ------------------ Yardımcılar ------------------ */
-const R=(a,b)=>a+Math.random()*(b-a);
-const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
-const toast=s=>{const t=document.getElementById('toast');t.textContent=s;t.style.display='block';setTimeout(()=>t.style.display='none',1200);};
-
-/* ------------------ Vektör “sprite” çizimleri ------------------ */
-/* Temiz çizim için path ile şekil veriyoruz; sonra offscreen’e basıp canvas’a koyuyoruz */
-function makeCanvas(w=128,h=128){ const c=document.createElement('canvas'); c.width=w; c.height=h; return c; }
-
-/* OKAPI (Kapi) — gerçek okapi referansı: koyu kahverengi gövde, beyaz çizgili arka bacaklar, kısa boyun, büyük kulaklar */
-function drawOkapi(ctx, t=0){
-  ctx.save();
+/* --- KAPI (okapi) vektör çizim: belirgin kontur + şeritler + yüz --- */
+function drawKapiBody(ctx, x, y, s, frame){
+  ctx.save(); ctx.translate(x,y); ctx.scale(s,s);
   // gölge
-  ctx.globalAlpha=0.25; ctx.fillStyle='#000'; ctx.beginPath();
-  ctx.ellipse(64,110,34,10,0,0,Math.PI*2); ctx.fill();
-  ctx.globalAlpha=1;
+  ctx.globalAlpha=0.25; ctx.fillStyle="#000"; ctx.beginPath();
+  ctx.ellipse(0,32,22,8,0,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
 
   // gövde
-  const bodyGrad = ctx.createLinearGradient(0,0,0,128);
-  bodyGrad.addColorStop(0,'#3d2618'); bodyGrad.addColorStop(1,'#6b4124');
-  ctx.fillStyle=bodyGrad; ctx.strokeStyle='#1d120c'; ctx.lineWidth=2;
+  ctx.fillStyle="#8a5b34"; ctx.strokeStyle="#3d2918"; ctx.lineWidth=2.2;
+  ctx.beginPath(); ctx.roundRect(-26,-2,46,30,10); ctx.fill(); ctx.stroke();
 
-  // gövde ana form
-  ctx.beginPath();
-  ctx.moveTo(28,72); ctx.quadraticCurveTo(20,60,26,52);
-  ctx.lineTo(78,48); ctx.quadraticCurveTo(96,50,100,64);
-  ctx.quadraticCurveTo(102,78,88,84);
-  ctx.lineTo(42,86); ctx.quadraticCurveTo(30,84,28,72);
-  ctx.closePath(); ctx.fill(); ctx.stroke();
+  // karın
+  ctx.fillStyle="#c89b6a"; ctx.strokeStyle="#6b4727";
+  ctx.beginPath(); ctx.roundRect(-12,4,22,16,6); ctx.fill(); ctx.stroke();
 
-  // boyun & kafa
-  ctx.beginPath();
-  ctx.moveTo(76,50); ctx.quadraticCurveTo(88,42,92,36); // boyun
-  ctx.quadraticCurveTo(98,30,102,28); // kafa alt
-  ctx.quadraticCurveTo(108,26,106,22); // burun
-  ctx.quadraticCurveTo(102,20,96,22);
-  ctx.quadraticCurveTo(90,24,86,30);
-  ctx.quadraticCurveTo(82,36,76,50);
-  ctx.closePath(); ctx.fill(); ctx.stroke();
+  // arka şeritler (okapi bacak çizgileri)
+  ctx.fillStyle="#1d1d1d";
+  ctx.fillRect(-18,18,6,8); ctx.fillRect(-8,18,6,8); ctx.fillRect(2,18,6,8);
 
-  // kulaklar
-  ctx.fillStyle='#5b3620';
-  ctx.beginPath(); ctx.ellipse(94,18,6,10, -0.2, 0, Math.PI*2); ctx.fill(); ctx.strokeStyle='#25160e'; ctx.stroke();
-  ctx.beginPath(); ctx.ellipse(84,20,5,9, 0.3, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+  // kafa
+  ctx.fillStyle="#8a5b34"; ctx.strokeStyle="#3d2918";
+  ctx.beginPath(); ctx.roundRect(16,-12,18,18,6); ctx.fill(); ctx.stroke();
 
-  // yüz – göz
-  ctx.fillStyle='#111'; ctx.beginPath();
-  const blink = Math.sin(t/350) > 0.8;  // arada göz kırp
-  if (blink) { ctx.fillRect(98,26,8,2); }
-  else { ctx.ellipse(101,26,2,3,0,0,Math.PI*2); ctx.fill(); }
+  // kulak (sağ)
+  ctx.fillStyle="#a87346"; ctx.strokeStyle="#3d2918";
+  ctx.beginPath(); ctx.ellipse(28,-16,6,7,0,0,Math.PI*2); ctx.fill(); ctx.stroke();
+  // kulak (sol küçük)
+  ctx.beginPath(); ctx.ellipse(22,-15,5,6,0,0,Math.PI*2); ctx.fill(); ctx.stroke();
 
-  // burun parıltısı
-  ctx.fillStyle='rgba(255,255,255,.25)'; ctx.fillRect(104,22,3,2);
+  // yüz maskesi (okapi)
+  ctx.fillStyle="#caa681"; ctx.beginPath();
+  ctx.moveTo(28,-8); ctx.quadraticCurveTo(34,-6,32,-1); ctx.quadraticCurveTo(24,2,20,-2); ctx.quadraticCurveTo(24,-8,28,-8);
+  ctx.fill(); ctx.stroke();
+
+  // göz (blink: frame%30==0 ile kapat)
+  ctx.fillStyle="#111";
+  if (frame%30===0){ ctx.fillRect(30,-4,8,2); }
+  else {
+    ctx.beginPath(); ctx.arc(31,-4,2,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle="#fff"; ctx.fillRect(30.5,-4.8,1.2,1.2);
+  }
+
+  // atkı
+  ctx.fillStyle="#e74c3c"; ctx.strokeStyle="#8b2b24";
+  ctx.beginPath(); ctx.roundRect(-18,-6,24,6,3); ctx.fill(); ctx.stroke();
+  var wave = [ -6,-3,0,-4,-1,-5 ][frame%6];
+  ctx.beginPath(); ctx.roundRect(-30,-6+wave,12,6,3); ctx.fill(); ctx.stroke();
+
+  // kanat (hareket)
+  ctx.fillStyle="#f3c97a"; ctx.strokeStyle="#8c6b1c";
+  var wing = [ -4,0,4,2,4,0 ][frame%6];
+  ctx.beginPath(); ctx.roundRect(-14,6+wing,16,8,4); ctx.fill(); ctx.stroke();
 
   // bacaklar
-  // ön bacak
-  ctx.lineWidth=3; ctx.strokeStyle='#1d120c';
-  ctx.fillStyle='#4a2e1c';
-  ctx.beginPath(); ctx.roundRect(46,84,8,28,3); ctx.fill(); ctx.stroke();
-  // arka bacak (çizgili)
-  ctx.fillStyle='#4a2e1c'; ctx.beginPath(); ctx.roundRect(68,84,9,28,3); ctx.fill(); ctx.stroke();
-  // zebra şeritleri
-  ctx.fillStyle='#e8edf2';
-  for (let y=86;y<110;y+=6){ ctx.fillRect(68,y,9,2); }
-
-  // atkı (kırmızı) – dalgalı hareket
-  ctx.fillStyle='#e84141';
-  const wave = Math.sin(t/150)*2;
-  ctx.fillRect(50,58,24,6);
-  ctx.fillRect(36,58+wave,16,6);
+  ctx.fillStyle="#5d3b1a";
+  var la=[0,2,5,2,0,2][frame%6], lb=[6,3,0,3,6,3][frame%6];
+  ctx.fillRect(-8,24,4,8+la); ctx.fillRect(2,24,4,8+lb);
 
   ctx.restore();
 }
-function okapiSprite(){
-  const c=makeCanvas(128,128), p=c.getContext('2d');
-  drawOkapi(p, 0);
-  return c;
+
+/* --- COIN (parıltı) --- */
+function drawCoin(ctx,x,y,scale,frame){
+  ctx.save(); ctx.translate(x,y); ctx.scale(scale,scale);
+  var a = (frame%40)/40 * Math.PI*2;
+  ctx.rotate(a*0.15);
+  var g=gradient(ctx,-12,-12,12,12,[[0,"#ffe074"],[1,"#ffbf2b"]]);
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(0,0,12,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle="#fff8"; ctx.fillRect(-2,-10,4,20);
+  ctx.restore();
 }
 
-/* Coin — parlak kenar & parıltı */
-function coinSprite(){
-  const c=makeCanvas(80,80), p=c.getContext('2d');
-  p.save();
-  const g=p.createRadialGradient(40,40,6, 40,40,28);
-  g.addColorStop(0,'#ffe082'); g.addColorStop(1,'#ffb300');
-  p.fillStyle=g; p.beginPath(); p.arc(40,40,26,0,Math.PI*2); p.fill();
-  // parıltı
-  p.globalCompositeOperation='lighter';
-  p.fillStyle='rgba(255,255,255,.45)';
-  p.beginPath(); p.arc(30,32,10,0,Math.PI*2); p.fill();
-  p.restore();
-  p.strokeStyle='#5d3b00'; p.lineWidth=3; p.beginPath(); p.arc(40,40,26,0,Math.PI*2); p.stroke();
-  return c;
+/* --- ENGELLER: belirgin silüetler --- */
+function drawLog(ctx,x,y,w,h){ // kütük
+  ctx.save(); ctx.translate(x,y);
+  ctx.fillStyle="#8e5b2a"; ctx.strokeStyle="#3d2918"; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.roundRect(0,0,w,h,8); ctx.fill(); ctx.stroke();
+  ctx.restore();
+}
+function drawRock(ctx,x,y,w,h){ // kaya
+  ctx.save(); ctx.translate(x,y);
+  ctx.fillStyle="#5f6a72"; ctx.strokeStyle="#2c3e50"; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(6,h); ctx.lineTo(w*0.3,4); ctx.lineTo(w*0.8,10); ctx.lineTo(w-4,h-2); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.restore();
+}
+function drawSpike(ctx,x,y,w,h){ // diken/çalı
+  ctx.save(); ctx.translate(x,y);
+  ctx.fillStyle="#1e8449"; ctx.strokeStyle="#0b4826"; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(0,h); ctx.lineTo(w*0.2,0); ctx.lineTo(w*0.4,h); ctx.lineTo(w*0.6,0); ctx.lineTo(w*0.8,h); ctx.lineTo(w,h*0.1); ctx.lineTo(w,h); ctx.closePath();
+  ctx.fill(); ctx.stroke();
+  ctx.restore();
 }
 
-/* Engeller: temiz siluet + dış kontur */
-function logSprite(){ // kütük
-  const c=makeCanvas(120,80), p=c.getContext('2d');
-  p.fillStyle='#8b5a2b'; p.strokeStyle='#3e2814'; p.lineWidth=4;
-  p.beginPath(); p.roundRect(6,30,108,26,10); p.fill(); p.stroke();
-  // yıllık halkalar
-  p.fillStyle='rgba(255,255,255,.08)';
-  p.beginPath(); p.arc(24,43,10,0,Math.PI*2); p.fill();
-  return c;
+/* --- ARKA PLAN KATLARI --- */
+function drawSky(){
+  var g=ctx.createLinearGradient(0,0,0,H());
+  g.addColorStop(0,"#141b3a"); g.addColorStop(1,"#0d0f1f");
+  ctx.fillStyle=g; ctx.fillRect(0,0,W(),H());
 }
-function bushSprite(){ // çalı
-  const c=makeCanvas(110,90), p=c.getContext('2d');
-  p.fillStyle='#2ecc71'; p.strokeStyle='#145a32'; p.lineWidth=4;
-  p.beginPath(); p.moveTo(10,70);
-  p.quadraticCurveTo(30,40,50,60);
-  p.quadraticCurveTo(70,30,90,50);
-  p.quadraticCurveTo(100,65,96,70);
-  p.lineTo(10,70); p.fill(); p.stroke();
-  return c;
+function ensureBackdrops(){
+  if (stars.length<10) stars.push({x:R(0,W()), y:R(0,H()*0.6), s:R(.05,.12)});
+  if (mountains.length<4) mountains.push({x:R(0,W()), y:H()-GROUND_H-150, w:R(220,320), s:R(.12,.2)});
+  if (trees.length<7) trees.push({x:R(0,W()), y:H()-GROUND_H-90, w:R(70,110), s:R(.3,.5)});
+  if (clouds.length<6) clouds.push({x:R(0,W()), y:R(20,H()-GROUND_H-200), w:R(70,140), s:R(.2,.5)});
 }
-function rockSprite(){ // kaya
-  const c=makeCanvas(90,100), p=c.getContext('2d');
-  p.fillStyle='#9aa7b1'; p.strokeStyle='#5a646d'; p.lineWidth=4;
-  p.beginPath(); p.moveTo(10,90);
-  p.lineTo(30,30); p.lineTo(70,20); p.lineTo(82,60); p.lineTo(75,90);
-  p.closePath(); p.fill(); p.stroke();
-  return c;
+function drawBackdrops(dt){
+  // yıldızlar
+  ctx.fillStyle="#fff";
+  for (var i=0;i<stars.length;i++){
+    var s=stars[i]; s.x -= s.s*0.3; if (s.x<-2) s.x=W()+2;
+    ctx.fillRect(s.x|0, s.y|0, 1, 1);
+  }
+  // dağlar
+  for (var m=0;m<mountains.length;m++){
+    var a=mountains[m]; a.x -= a.s*0.7; if (a.x<-a.w) a.x=W()+a.w;
+    ctx.fillStyle="#1b2a4a"; ctx.fillRect(a.x, a.y, a.w, a.w*0.5);
+  }
+  // ağaçlar
+  for (var j=0;j<trees.length;j++){
+    var t=trees[j]; t.x -= t.s*0.9; if (t.x<-t.w) t.x=W()+t.w;
+    ctx.fillStyle="#1d6b3b"; ctx.fillRect(t.x, t.y, t.w, t.w*1.2);
+  }
+  // bulutlar
+  for (var c=0;c<clouds.length;c++){
+    var cl=clouds[c]; cl.x -= cl.s*speed*0.7; if (cl.x<-cl.w){ cl.x=W()+cl.w; cl.y=R(20,H()-GROUND_H-200); }
+    ctx.fillStyle="#fff"; ctx.globalAlpha=0.85;
+    ctx.beginPath(); ctx.ellipse(cl.x, cl.y, cl.w*0.5, 18, 0, 0, Math.PI*2); ctx.fill();
+    ctx.globalAlpha=1;
+  }
+}
+function drawGround(){
+  groundX -= speed*1.2; if (groundX<=-36) groundX += 36;
+  // toprak
+  ctx.fillStyle="#73491e"; ctx.fillRect(0, H()-GROUND_H, W(), GROUND_H);
+  // çimen taraması
+  ctx.fillStyle="#2ecc71";
+  for (var x=groundX; x<W()+36; x+=36){ ctx.fillRect(x, H()-GROUND_H, 28, 7); }
+  // ön çizgi
+  ctx.fillStyle="#1e8449"; ctx.fillRect(0, H()-GROUND_H+7, W(), 3);
 }
 
-/* Arka plan döşemeleri */
-function groundTile(){
-  const c=makeCanvas(64,64), p=c.getContext('2d');
-  p.fillStyle='#6e4b2e'; p.fillRect(0,40,64,24);
-  p.fillStyle='#1fab61'; p.fillRect(0,38,64,6);
-  return c;
-}
-function cloudTile(){
-  const c=makeCanvas(128,64), p=c.getContext('2d');
-  p.fillStyle='rgba(255,255,255,.95)';
-  p.beginPath(); p.arc(30,36,18,0,Math.PI*2); p.fill();
-  p.beginPath(); p.arc(54,28,20,0,Math.PI*2); p.fill();
-  p.beginPath(); p.arc(78,36,18,0,Math.PI*2); p.fill();
-  return c;
-}
-
-/* Offscreen sprite’ları hazırla */
-const SPR_OKAPI = okapiSprite();
-const SPR_COIN  = coinSprite();
-const SPR_LOG   = logSprite();
-const SPR_BUSH  = bushSprite();
-const SPR_ROCK  = rockSprite();
-const TILE_G    = groundTile();
-const TILE_CLOUD= cloudTile();
-
-/* ------------------ Oyun state ------------------ */
-let running=false, paused=false, over=false;
-let score=0, best=0, lives=3, combo=1, comboTimer=0;
-let speed=3.1, t=0, groundX=0;
-let last=0, nextObs=600, nextCoin=400, lastOnGround=0;
-let hitFlash=0, shake=0;
-let showHitbox=false;
-
-const G=0.56, JUMP=-10.1, COYOTE=120, GROUND_H=84;
-const SPAWN_OBS=[900,1400], SPAWN_COIN=[600,1000];
-
-let kapi, obstacles=[], coins=[], clouds=[];
-
-/* Kapi objesi (dairesel hitbox; görsel ile hizalı) */
+/* ---------- NESNELER ---------- */
 function resetKapi(){
-  kapi={
-    x: 92, y: H()-GROUND_H-56, vy:0, onGround:true,
-    r: 24, // hitbox yarıçapı
-    step(dt){
-      this.vy+=G; this.y+=this.vy;
-      const floor=H()-GROUND_H-56;
-      if (this.y>=floor){ this.y=floor; this.vy=0; if(!this.onGround) lastOnGround=performance.now(); this.onGround=true; }
+  kapi = {
+    x: 96, y: H()-GROUND_H-54, vy: 0, onGround:true,
+    frame:0, ftime:0, scale:2.2, inv:0, ring:0,
+    flap: function(){
+      var now = performance.now();
+      if (this.onGround || (now-lastOnGround)<COYOTE){ this.vy=JUMP; this.onGround=false; }
     },
-    flap(){
-      const now=performance.now();
-      if (this.onGround || (now-lastOnGround)<COYOTE){ this.vy=JUMP; this.onGround=false; if(audioEnabled) bipJump(); }
+    step: function(dt){
+      this.vy += G; this.y += this.vy;
+      var floor = H()-GROUND_H-54;
+      if (this.y >= floor){ this.y=floor; this.vy=0; if(!this.onGround) lastOnGround=performance.now(); this.onGround=true; }
+      this.ftime += dt; if (this.ftime>70){ this.ftime=0; this.frame=(this.frame+1)%60; } // 60fps bazlı anim
+      if (this.inv>0) this.inv -= dt;
+      if (this.ring>0) this.ring -= dt;
     },
-    draw(){
-      // hitbox (debug)
-      if (showHitbox){
-        cx.strokeStyle='rgba(0,255,255,.7)'; cx.lineWidth=2;
-        cx.beginPath(); cx.arc(this.x,this.y,this.r,0,Math.PI*2); cx.stroke();
+    draw: function(){
+      // vurulma halkası
+      if (this.ring>0){
+        ctx.save();
+        var r = 30 + (400-this.ring)/8;
+        ctx.globalAlpha = Math.max(0, this.ring/400);
+        ctx.beginPath(); ctx.arc(this.x, this.y+6, r, 0, Math.PI*2);
+        ctx.strokeStyle="rgba(255,255,255,0.8)"; ctx.lineWidth=2; ctx.stroke();
+        ctx.restore();
       }
-      cx.drawImage(SPR_OKAPI, this.x-64, this.y-64, 128,128);
+      // inv flaşı
+      if (this.inv>0){ ctx.globalAlpha = 0.6+0.4*Math.sin(performance.now()/40); }
+      drawKapiBody(ctx, this.x, this.y, this.scale, this.frame);
+      ctx.globalAlpha = 1;
+      // hitbox
+      if (showHitbox){
+        ctx.strokeStyle="#00ffe0"; ctx.strokeRect(this.x-22, this.y-22, 44, 44);
+        ctx.beginPath(); ctx.arc(this.x, this.y, 20, 0, Math.PI*2); ctx.stroke();
+      }
     }
   };
 }
-
-/* Spawn fonksiyonları */
 function spawnObstacle(){
-  const roll=Math.random();
-  let spr, w, h, offY=0, type='log';
-  if (roll<0.34){ spr=SPR_LOG; w=120; h=50; offY=H()-GROUND_H-h; type='log'; }
-  else if (roll<0.67){ spr=SPR_BUSH; w=110; h=70; offY=H()-GROUND_H-h; type='bush'; }
-  else { spr=SPR_ROCK; w=90; h=90; offY=H()-GROUND_H-h; type='rock'; }
-  obstacles.push({x:W()+40,y:offY,w,h,spr,type,
-    aabb:{x:0,y:0,w:0,h:0} // çarpışma kutusu (hesaplanacak)
-  });
-  nextObs=R(SPAWN_OBS[0],SPAWN_OBS[1]);
+  var t = Math.random()<0.33 ? 'log' : (Math.random()<0.5 ? 'rock' : 'spike');
+  var h, w, y=0;
+  if (t==='log'){ w=52; h=26; y=H()-GROUND_H-h; }
+  else if (t==='rock'){ w=38; h=42; y=H()-GROUND_H-h; }
+  else { w=40; h=50; y=H()-GROUND_H-h; }
+  obstacles.push({x:W()+40,y:y,w:w,h:h,type:t,flash:0});
+  nextObs = R(SPAWN_OBS[0], SPAWN_OBS[1]);
 }
 function spawnCoin(){
-  const y = H()-GROUND_H - R(80,160);
-  coins.push({x:W()+30, y, r:14, spr:SPR_COIN, taken:false});
-  nextCoin=R(SPAWN_COIN[0],SPAWN_COIN[1]);
-}
-function ensureClouds(){ while(clouds.length<6){ clouds.push({x:R(0,W()), y:R(20,H()-GROUND_H-220), w:R(100,180), s:R(.25,.55)}); } }
-
-/* Çarpışma yardımcıları */
-function circleAABB(cx,cy,cr, box){
-  // box: {x,y,w,h}
-  const nx=clamp(cx, box.x, box.x+box.w);
-  const ny=clamp(cy, box.y, box.y+box.h);
-  const dx=cx-nx, dy=cy-ny;
-  return (dx*dx+dy*dy) <= cr*cr;
+  coins.push({x:W()+30, y:H()-GROUND_H - R(70,150), r:12, scale:1.7, frame:0, taken:false});
+  nextCoin = R(SPAWN_COIN[0], SPAWN_COIN[1]);
 }
 
-/* Parallax & zemin */
-function drawBackground(){
-  const g=cx.createLinearGradient(0,0,0,H());
-  g.addColorStop(0,'#111a36'); g.addColorStop(1,'#0a0e1a');
-  cx.fillStyle=g; cx.fillRect(0,0,W(),H());
-
-  // bulutlar
-  clouds.forEach(c=>{
-    c.x-=c.s*speed*0.7; if (c.x<-c.w){ c.x=W()+c.w; c.y=R(20,H()-GROUND_H-200); }
-    cx.drawImage(TILE_CLOUD, c.x, c.y, c.w, c.w*0.5);
-  });
+/* ---------- ÇARPIŞMA ---------- */
+function hitRect(o){ // kapsül/daire benzeri basit kontrol: merkez + yarıçap
+  var rx=kapi.x, ry=kapi.y, rr=20;
+  return (rx+rr>o.x && rx-rr<o.x+o.w && ry+rr>o.y && ry-rr<o.y+o.h);
 }
-function drawGround(){
-  groundX-=speed*1.2; if(groundX<=-64) groundX+=64;
-  for(let x=groundX;x<W()+64;x+=64) cx.drawImage(TILE_G, x, H()-GROUND_H, 64,64);
-}
+function dist2(a,b){ var dx=a.x-b.x, dy=a.y-b.y; return dx*dx+dy*dy; }
 
-/* Ana döngü */
-function loop(ts){
-  if(!last) last=ts;
-  const rawDt = ts-last; last=ts;
-  const dt = Math.min(50, rawDt);
-
-  if (shake>0) shake-=dt;
-  const sx = (shake>0)? R(-4,4):0, sy = (shake>0)? R(-2,2):0;
-  cx.save(); cx.translate(sx,sy);
-
-  if (running && !paused && !over){
-    t+=dt;
-    nextObs-=dt; if(nextObs<=0) spawnObstacle();
-    nextCoin-=dt; if(nextCoin<=0) spawnCoin();
-
-    obstacles.forEach(o=>o.x-=speed);
-    obstacles = obstacles.filter(o=>o.x+o.w>-20);
-    coins.forEach(c=>c.x-=speed);
-    coins = coins.filter(c=>c.x>-20);
-
-    // çarpışma kutularını engel sprite'larına göre sıkılaştır
-    obstacles.forEach(o=>{
-      // her sprite için gözle ayarlanmış aabb (görselle daha uyumlu)
-      if (o.type==='log'){ o.aabb={x:o.x+10,y:o.y+8,w:o.w-20,h:o.h-12}; }
-      else if (o.type==='bush'){ o.aabb={x:o.x+12,y:o.y+10,w:o.w-22,h:o.h-18}; }
-      else { o.aabb={x:o.x+10,y:o.y+10,w:o.w-20,h:o.h-20}; }
-    });
-
-    // karakter
-    kapi.step(dt);
-    score += speed*0.02;
-    comboTimer -= dt; if (comboTimer<=0) combo=1;
-
-    // coin toplama (çarpma anında parıltı + ses)
-    for (const c of coins){
-      if (!c.taken){
-        const dx=kapi.x-c.x, dy=kapi.y-c.y;
-        if (dx*dx+dy*dy < (kapi.r+c.r)*(kapi.r+c.r)){
-          c.taken=true;
-          const add = 6*combo; score+=add;
-          combo = clamp(combo+0.25, 1, 5); comboTimer=1800;
-          if (audioEnabled) bipCoin();
-        }
-      }
-    }
-
-    // engel çarpışma (net geri bildirim: ekran titremesi + kırmızı flash)
-    for (const o of obstacles){
-      if (circleAABB(kapi.x, kapi.y, kapi.r*0.92, o.aabb)){
-        lives -= 1; document.getElementById('lives').textContent=Math.max(0,lives);
-        hitFlash = 220; shake=260;
-        if (audioEnabled) hitS();
-        o.x -= 60; // it
-        if (lives<=0){ endGame(); break; }
-      }
-    }
-
-    // zorluk artışı
-    speed += 0.00045*dt;
-
-    // skor-paneller
-    document.getElementById('score').textContent = Math.floor(score);
-    document.getElementById('combo').textContent = Math.floor(combo);
+/* ---------- PARÇACIK ---------- */
+function part(x,y,col,vx,vy,life){ particles.push({x:x,y:y,col:col,vx:vx,vy:vy,life:life}); }
+function drawParticles(dt){
+  for (var i=0;i<particles.length;i++){
+    var p=particles[i]; p.x+=p.vx; p.y+=p.vy; p.vy+=0.02; p.life-=dt;
+    ctx.globalAlpha = Math.max(0, p.life/600); ctx.fillStyle=p.col; ctx.fillRect(p.x,p.y,3,3);
+    ctx.globalAlpha=1;
   }
+  particles = particles.filter(function(p){ return p.life>0; });
+}
 
-  // ÇİZİM
-  drawBackground();
+/* ---------- ÇİZİM DÖNGÜSÜ ---------- */
+function renderScene(dt){
+  // ekran sarsıntısı
+  if (shake>0){ shake -= dt; var sx = (Math.random()*2-1)*3, sy=(Math.random()*2-1)*3; ctx.save(); ctx.translate(sx, sy); }
+  drawSky();
+  ensureBackdrops();
+  drawBackdrops(dt);
   drawGround();
 
-  // coinler
-  coins.forEach(c=>{
-    cx.drawImage(SPR_COIN, c.x-40, c.y-40, 80,80);
-    if (showHitbox){
-      cx.strokeStyle='rgba(255,255,0,.7)'; cx.beginPath(); cx.arc(c.x,c.y,c.r,0,Math.PI*2); cx.stroke();
-    }
-  });
-
-  // engeller
-  obstacles.forEach(o=>{
-    cx.drawImage(o.spr, o.x, o.y, o.w, o.h);
-    if (showHitbox){
-      cx.strokeStyle='rgba(255,0,0,.7)'; cx.lineWidth=2; cx.strokeRect(o.aabb.x,o.aabb.y,o.aabb.w,o.aabb.h);
-    }
-  });
-
-  // karakter
-  kapi.draw();
-
-  // çarpma “flash” overlay
-  if (hitFlash>0){
-    hitFlash-=dt;
-    cx.globalAlpha = Math.max(0, hitFlash/220)*0.6;
-    cx.fillStyle='#ff3344'; cx.fillRect(0,0,W(),H());
-    cx.globalAlpha=1;
+  // paralar
+  for (var i=0;i<coins.length;i++){
+    var c=coins[i]; if (c.taken) continue;
+    c.frame += dt; drawCoin(ctx, c.x, c.y, c.scale, c.frame);
+    if (showHitbox){ ctx.strokeStyle="#ffd23f"; ctx.beginPath(); ctx.arc(c.x,c.y,14,0,Math.PI*2); ctx.stroke(); }
   }
 
-  cx.restore();
+  // engeller
+  for (var j=0;j<obstacles.length;j++){
+    var o=obstacles[j];
+    if (o.type==='log') drawLog(ctx,o.x,o.y,o.w,o.h);
+    else if (o.type==='rock') drawRock(ctx,o.x,o.y,o.w,o.h);
+    else drawSpike(ctx,o.x,o.y,o.w,o.h);
+    if (o.flash>0){
+      ctx.save(); ctx.globalAlpha=o.flash/300; ctx.strokeStyle="#fff"; ctx.lineWidth=3; ctx.strokeRect(o.x-2,o.y-2,o.w+4,o.h+4); ctx.restore();
+      o.flash -= dt;
+    }
+    if (showHitbox){ ctx.strokeStyle="#ff5c5c"; ctx.strokeRect(o.x,o.y,o.w,o.h); }
+  }
+
+  // kapi
+  kapi.draw();
+
+  // parçacıklar
+  drawParticles(dt);
+
+  if (shake>0){ ctx.restore(); }
+}
+
+/* ---------- OYUN DÖNGÜSÜ ---------- */
+function loop(ts){
+  if(!last) last=ts;
+  var dt = Math.min(50, ts-last); last=ts;
+
+  if (running && !paused && !over){
+    t += dt;
+    // spawn
+    nextObs -= dt; if (nextObs<=0) spawnObstacle();
+    nextCoin -= dt; if (nextCoin<=0) spawnCoin();
+
+    // hareket
+    for (var i=0;i<obstacles.length;i++) obstacles[i].x -= speed;
+    obstacles = obstacles.filter(function(o){ return o.x+o.w>-12; });
+    for (var j=0;j<coins.length;j++) coins[j].x -= speed;
+    coins = coins.filter(function(c){ return c.x>-20; });
+
+    // kapi fizik
+    kapi.step(dt);
+
+    // puan & combo
+    score += speed*0.02;
+    comboTimer -= dt; if (comboTimer<=0) combo=1;
+    document.getElementById('score').textContent = Math.floor(score);
+    document.getElementById('combo').textContent = combo|0;
+
+    // coin çarpışma
+    for (var c=0;c<coins.length;c++){
+      var coin = coins[c]; if (coin.taken) continue;
+      if (dist2({x:kapi.x,y:kapi.y},{x:coin.x,y:coin.y}) < (26*26)){
+        coin.taken = true;
+        for (var n=0;n<10;n++) part(coin.x, coin.y, "#ffd23f", R(-1,1), R(-2,0), 500);
+        var add = 5*combo; score += add; combo = clamp(combo+0.25, 1, 5); comboTimer = 2000;
+      }
+    }
+
+    // engel çarpışma
+    for (var o=0;o<obstacles.length;o++){
+      var ob = obstacles[o];
+      if (hitRect(ob)){
+        if (kapi.inv<=0){
+          lives -= 1; kapi.inv=600; kapi.ring=400; shake=250; ob.flash=300;
+          for (var n=0;n<16;n++) part(kapi.x,kapi.y,"#fff",R(-2,2),R(-2,0),600);
+          document.getElementById('lives').textContent = Math.max(0,lives);
+          if (lives<=0){ endGame(); break; }
+        }
+        ob.x -= 60; // geri it
+      }
+    }
+
+    // zorluk
+    speed += 0.00045*dt;
+  }
+
+  renderScene(dt);
   requestAnimationFrame(loop);
 }
 
-/* Başlat/Bitiş/Pause */
+/* ---------- KONTROLLER ---------- */
 function startGame(){
   running=true; paused=false; over=false;
-  score=0; lives=3; combo=1; comboTimer=0; speed=3.1;
-  obstacles=[]; coins=[]; clouds=[]; groundX=0; t=0; lastOnGround=0; hitFlash=0; shake=0;
-  ensureClouds(); resetKapi();
-  document.getElementById('score').textContent='0';
-  document.getElementById('lives').textContent='3';
-  document.getElementById('combo').textContent='1';
-  document.getElementById('hint').style.display='none';
+  score=0; lives=3; combo=1; comboTimer=0; speed=3.0; groundX=0; shake=0;
+  coins=[]; obstacles=[]; particles=[];
+  nextObs=450; nextCoin=600; t=0; lastOnGround=0;
+  resetKapi();
+  document.getElementById('score').textContent="0";
+  document.getElementById('lives').textContent="3";
+  document.getElementById('combo').textContent="1";
+  document.getElementById('hint').style.display="none";
 }
 function endGame(){
   over=true; running=false;
   best = Math.max(best, Math.floor(score));
-  const msg = "💥 Oyun bitti! Skor: " + Math.floor(score) + " • En iyi: " + best + "\nTekrar için Başlat.";
-  const hint = document.getElementById('hint'); hint.textContent = msg; hint.style.display='block';
-  try{ if (tg && typeof tg.sendData==='function') tg.sendData(JSON.stringify({type:"runner_score",score:Math.floor(score)})); }catch(e){}
+  var msg = "💥 Oyun bitti! Skor: " + Math.floor(score) + " • En iyi: " + best + "\nTekrar için Başlat.";
+  var hint=document.getElementById('hint'); hint.textContent=msg; hint.style.display="block";
+  try{ if (tg && typeof tg.sendData==='function'){ tg.sendData(JSON.stringify({ type:"runner_score", score: Math.floor(score) })); } }catch(e){}
 }
 function togglePause(){
   if (!running || over) return;
-  paused=!paused;
+  paused = !paused;
   document.getElementById('btnPause').textContent = paused ? "▶️ Devam" : "⏸️ Duraklat";
   toast(paused ? "Duraklatıldı" : "Devam");
 }
 function tap(ev){
   try{ if (ev && typeof ev.preventDefault==='function') ev.preventDefault(); }catch(_){}
-  if (!running || over) startGame(); else if (!paused) kapi.flap();
+  if (!running || over){ startGame(); } else if (!paused){ kapi.flap(); }
 }
 
-/* Etkinlikler (iOS uyumlu) */
+/* ---------- EVENTLER ---------- */
 (function bind(){
-  const tapEvent = ('ontouchstart' in window) ? 'touchstart' : (window.PointerEvent ? 'pointerdown' : 'mousedown');
-  cv.addEventListener(tapEvent, tap, {passive:false});
-  document.addEventListener('keydown', e=>{ if(e.code==='Space') tap(e); else if (e.code==='KeyP') togglePause(); });
-
-  document.getElementById('btnStart').addEventListener('click', ()=>{ startGame(); if(audioEnabled){ initAudio(); bipJump(); } });
+  var tapEvent = ('ontouchstart' in window) ? 'touchstart' : (window.PointerEvent ? 'pointerdown' : 'mousedown');
+  cvs.addEventListener(tapEvent, tap, {passive:false});
+  document.addEventListener('keydown', function(e){ if (e.code==='Space') tap(e); else if (e.code==='KeyP') togglePause(); else if (e.code==='KeyH'){ showHitbox=!showHitbox; } });
+  document.getElementById('btnStart').addEventListener('click', function(){ startGame(); });
   document.getElementById('btnPause').addEventListener('click', togglePause);
-  document.getElementById('btnSound').addEventListener('click', ()=>{ audioEnabled=!audioEnabled; if(audioEnabled) initAudio(); toast(audioEnabled?"🔊 Ses açık":"🔇 Ses kapalı"); });
-  document.getElementById('btnHitbox').addEventListener('click', ()=>{ showHitbox=!showHitbox; toast(showHitbox?"🔲 Hitbox ON":"🔲 Hitbox OFF"); });
+  document.getElementById('btnHitbox').addEventListener('click', function(){ showHitbox=!showHitbox; toast(showHitbox?"Hitbox: Açık":"Hitbox: Kapalı"); });
 })();
 
-/* Başlat */
+/* ---------- BAŞLAT ---------- */
 resetKapi();
 requestAnimationFrame(loop);
 </script>
