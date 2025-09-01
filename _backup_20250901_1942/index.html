@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Okapi Altın Avcısı</title>
+  <style>
+    html,body{margin:0;height:100%;background:#0f0b14;color:#fff;font-family:system-ui,Segoe UI,Arial}
+    .wrap{display:flex;flex-direction:column;align-items:center;gap:8px;padding:10px}
+    #hud{display:flex;gap:12px;align-items:center}
+    .pill{padding:6px 10px;border:1px solid #3a2f46;border-radius:999px;background:#1a1323}
+    canvas{background:#18111e;border:1px solid #32273d;border-radius:12px;touch-action:manipulation}
+    button{padding:8px 12px;border-radius:10px;border:1px solid #3a2f46;background:#241b30;color:#fff;cursor:pointer}
+  </style>
+  <!-- Telegram Mini App JS -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script>
+  (function () {
+    const tg = window.Telegram?.WebApp;
+    tg?.expand();
+    window.__OKAPI__ = { tgid: tg?.initDataUnsafe?.user?.id || 0 };
+  })();
+</script>
+
+<body>
+<div class="wrap">
+  <div id="hud">
+    <div class="pill">⏱ <span id="time">0</span>s</div>
+    <div class="pill">⭐ <span id="score">0</span></div>
+    <div class="pill">🎯 tıkla: kancayı fırlat</div>
+  </div>
+  <canvas id="game" width="480" height="640"></canvas>
+  <div id="after" style="display:none">
+    <div style="margin:6px 0">Skorun: <b id="finalScore">0</b></div>
+    <button id="again">Tekrar Oyna</button>
+  </div>
+</div>
+
+<script>
+/* ========== 0) Ayarlar ========== */
+const API_URL = "https://SENIN-API-ADRESIN.do.app"; // <— BUNU kendi API servis URL’in ile değiştir
+
+/* ========== 1) Telegram Mini App Kimliği ========== */
+(function initTelegram(){
+  const tg = window.Telegram?.WebApp;
+  tg?.expand();
+  tg?.enableClosingConfirmation();
+  const tgid = tg?.initDataUnsafe?.user?.id || 0; // Telegram içinden gelmediyse 0 olur
+  window.__OKAPI__ = { tgid };
+})();
+
+/* ========== 2) Basit oyun durumu ========== */
+const cvs = document.getElementById('game');
+const ctx = cvs.getContext('2d');
+const HUDtime = document.getElementById('time');
+const HUDscore = document.getElementById('score');
+const after = document.getElementById('after');
+const finalScore = document.getElementById('finalScore');
+const againBtn = document.getElementById('again');
+
+const W=480, H=640;
+const ORX=240, ORY=100;        // kancanın çıktığı nokta
+const MIN=-70*Math.PI/180, MAX=70*Math.PI/180;
+const ANG_SPEED=90*Math.PI/180; // salınım hız (deg/s)
+const ROPE_SPEED=320;           // piksel/s (sadece animasyon)
+
+let duration=60;         // sunucudan gelecek
+let startedAt=0;         // epoch ms
+let timeLeft=0;
+let angle=0, dir=1;
+let firing=false, ropeLen=0;
+let taps=[];             // tıklama zamanları (ms)
+
+let loopId=null, timerId=null, ended=false;
+
+/* ========== 3) API'den süreyi al ========== */
+async function startGame(){
+  try{
+    const r = await fetch(API_URL + "/rope/start");
+    const d = await r.json();
+    duration = d.duration_sec || 60;
+  }catch(e){ console.error(e); duration = 60; }
+  timeLeft = duration;
+  startedAt = Date.now();
+  HUDtime.textContent = timeLeft;
+
+  loopId = requestAnimationFrame(loop);
+  timerId = setInterval(()=> {
+    if(timeLeft>0){ timeLeft--; HUDtime.textContent = timeLeft; }
+    if(timeLeft<=0 && !ended){ finishGame(); }
+  }, 1000);
+}
+
+/* ========== 4) Oyun döngüsü ========== */
+let last = performance.now();
+function loop(ts){
+  const dt = (ts-last)/1000; last = ts;
+  update(dt); draw();
+  loopId = requestAnimationFrame(loop);
+}
+
+function update(dt){
+  if(ended) return;
+  if(!firing){
+    let a = angle + dir*ANG_SPEED*dt;
+    if(a>MAX){ a=MAX; dir=-1; }
+    if(a<MIN){ a=MIN; dir=1; }
+    angle = a;
+  }else{
+    ropeLen += ROPE_SPEED*dt;
+    // duvara/zemine çarpınca (client animasyonu), geri sar
+    if(ORY + Math.sin(angle)*ropeLen >= 560 || ORX + Math.cos(angle)*ropeLen <= 0 || ORX + Math.cos(angle)*ropeLen >= W){
+      firing=false; ropeLen=0;
+    }
+  }
+}
+
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  // gökyüzü & zemin
+  ctx.fillStyle="#2e2335"; ctx.fillRect(0,0,W,160);
+  ctx.fillStyle="#5b3a26"; ctx.fillRect(0,160,W,H-160);
+  // Kapi placeholder
+  ctx.fillStyle="#fff"; ctx.font="16px system-ui";
+  ctx.fillText("🧣 Kapi", ORX-20, ORY-16);
+  // ip
+  ctx.strokeStyle="#ddd"; ctx.lineWidth=2;
+  const ex = ORX + Math.cos(angle)*(firing? ropeLen: 32);
+  const ey = ORY + Math.sin(angle)*(firing? ropeLen: 32);
+  ctx.beginPath(); ctx.moveTo(ORX,ORY); ctx.lineTo(ex,ey); ctx.stroke();
+  ctx.beginPath(); ctx.arc(ex,ey,6,0,Math.PI*2); ctx.fillStyle="#ccc"; ctx.fill();
+}
+
+/* ========== 5) Etkileşim ========== */
+cvs.addEventListener('click', ()=>{
+  if(ended || timeLeft<=0) return;
+  if(!firing){ firing=true; setTimeout(()=>{ firing=false; ropeLen=0; }, 800); }
+  const ms = Date.now() - startedAt;
+  taps.push(ms);
+});
+againBtn.addEventListener('click', ()=> location.reload());
+
+/* ========== 6) Bitince skoru sunucudan iste ========== */
+async function finishGame(){
+  ended = true;
+  try{
+    const body = {
+      telegram_id: window.__OKAPI__.tgid,
+      taps_ms: taps,
+      started_at: startedAt
+    };
+    const r = await fetch(API_URL + "/rope/submit", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(body)
+    });
+    const d = await r.json();
+    HUDscore.textContent = d.score ?? 0;
+    finalScore.textContent = d.score ?? 0;
+  }catch(e){ console.error(e); }
+  cancelAnimationFrame(loopId); clearInterval(timerId);
+  after.style.display = "block";
+}
+
+startGame();
+</script>
+</body>
+</html>
