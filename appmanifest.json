@@ -1,6 +1,6 @@
 {
-	"name": "KAPI Run",
-	"short_name": "KAPI Run",
+	"name": "Scary Run",
+	"short_name": "Scary Run",
 	"description": "Game",
 	"start_url": "index.html",
 	"display": "fullscreen",
