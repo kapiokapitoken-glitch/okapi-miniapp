@@ -2,30 +2,35 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width,initial-scale=1, user-scalable=no" />
   <title>KAPI RUN</title>
-
-  <!-- Telegram Web App SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-
-  <!-- Oyun stil dosyan (varsa) -->
-  <link rel="stylesheet" href="style.css" />
+  <link rel="manifest" href="appmanifest.json" />
+  <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
 </head>
-<body>
+<body style="margin:0;background:#000;">
   <div id="gameContainer"></div>
 
-  <!-- Oyun motorunun dosyaları (Construct / HTML5 export vb.) -->
+  <!-- YAPINA GÖRE *BİR* BLOK SEÇ -->
+  <!-- Eğer dosyalar kökte /scripts ve /data.json ise: -->
+  <!--
   <script src="scripts/c3runtime.js"></script>
   <script src="scripts/main.js"></script>
+  -->
 
-  <!-- Telegram Mini App entegrasyonu -->
+  <!-- Eğer hepsi HTML5 klasöründeyse: -->
+  <!--
+  <script src="HTML5/scripts/c3runtime.js"></script>
+  <script src="HTML5/scripts/main.js"></script>
+  <link rel="preload" href="HTML5/data.json" as="fetch" crossorigin>
+  -->
+
   <script>
-    window.addEventListener("DOMContentLoaded", () => {
-      if (window.Telegram && window.Telegram.WebApp) {
-        Telegram.WebApp.ready();
-        Telegram.WebApp.expand();
-      }
-    });
+    // Telegram Mini App hazır + tam ekran
+    if (window.Telegram?.WebApp) {
+      Telegram.WebApp.ready();
+      Telegram.WebApp.expand();
+    }
   </script>
 </body>
 </html>
