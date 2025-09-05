@@ -1,4 +1,5 @@
 ﻿import os
+import ssl
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, PlainTextResponse
 from itsdangerous import TimestampSigner, BadSignature
@@ -16,15 +17,21 @@ from sqlalchemy import text
 # ENV & globals
 # --------------------
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-GAME_SHORT_NAME = os.environ["GAME_SHORT_NAME"]          # BotFather'da verdiğin kısa ad ile birebir aynı
-PUBLIC_GAME_URL = os.environ["PUBLIC_GAME_URL"].rstrip("/") + "/"  # oyunun kök URL'i (index.html burada)
-DATABASE_URL = os.environ["DATABASE_URL"]               # postgresql+asyncpg://...?sslmode=require
+GAME_SHORT_NAME = os.environ["GAME_SHORT_NAME"]                  # BotFather kısa adıyla birebir
+PUBLIC_GAME_URL = os.environ["PUBLIC_GAME_URL"].rstrip("/") + "/"  # oyunun kök URL'i
+DATABASE_URL = os.environ["DATABASE_URL"]                        # postgresql+asyncpg://...  (SONUNDA sslmode OLMAYACAK)
 SECRET = os.environ.get("SECRET", "change-me")
 
 signer = TimestampSigner(SECRET)
 
-# DB (async)
-engine = create_async_engine(DATABASE_URL, pool_pre_ping=True, future=True)
+# DO PostgreSQL SSL ister → asyncpg için ssl context ile veriyoruz
+ssl_ctx = ssl.create_default_context()
+engine = create_async_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    future=True,
+    connect_args={"ssl": ssl_ctx},   # kritik: sslmode yerine ssl context
+)
 
 # FastAPI
 app = FastAPI()
@@ -37,7 +44,6 @@ tg_app: Application = ApplicationBuilder().token(BOT_TOKEN).build()
 # Telegram handlers
 # --------------------
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Oyun kartını gönder
     await context.bot.send_game(
         chat_id=update.effective_chat.id,
         game_short_name=GAME_SHORT_NAME
@@ -47,10 +53,6 @@ async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("pong 🏓")
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Oyun butonuna tıklandığında Telegram 'callback_query' gönderir.
-    Burada doğrulayıcı token içeren URL'yi döndürürüz.
-    """
     cq = update.callback_query
     if cq and cq.game_short_name == GAME_SHORT_NAME:
         user_id = cq.from_user.id
@@ -60,28 +62,25 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         payload = f"{user_id}:{chat_id}:{message_id}"
         token = signer.sign(payload).decode()
 
-        # Oyun URL'sine Telegram parametrelerini fragment ile ekliyoruz
         url = f"{PUBLIC_GAME_URL}#u={user_id}&c={chat_id}&m={message_id}&t={token}"
         await cq.answer(url=url)
     else:
         await cq.answer(text="Unknown game.", show_alert=True)
 
-# Handler kayıtları
 tg_app.add_handler(CommandHandler(["start", "play"], cmd_start))
 tg_app.add_handler(CommandHandler("ping", cmd_ping))
 tg_app.add_handler(CallbackQueryHandler(on_callback))
 
 
 # --------------------
-# App lifecycle (CRITICAL for PTB v21)
+# Lifecycle (PTB v21 için şart)
 # --------------------
 @app.on_event("startup")
 async def on_startup():
-    # Telegram botu başlat
     await tg_app.initialize()
     await tg_app.start()
 
-    # DB tablo oluştur (yoksa)
+    # scores tablosu yoksa oluştur
     create_sql = """
     CREATE TABLE IF NOT EXISTS scores (
         user_id BIGINT PRIMARY KEY,
@@ -100,7 +99,7 @@ async def on_shutdown():
 
 
 # --------------------
-# Webhook endpoint
+# Webhook
 # --------------------
 @app.post("/bot/webhook")
 async def tg_webhook(request: Request):
@@ -109,30 +108,16 @@ async def tg_webhook(request: Request):
     await tg_app.process_update(update)
     return JSONResponse({"ok": True})
 
-
-# Basit check
 @app.get("/bot/check")
 def bot_check():
     return PlainTextResponse("ok")
 
 
 # --------------------
-# Score & leaderboard API
+# Score & Leaderboard API
 # --------------------
 @app.post("/api/score")
 async def post_score(request: Request):
-    """
-    Body:
-    {
-      "user_id": 123,
-      "chat_id": 456,
-      "message_id": 789,
-      "token": "...",
-      "score": 50,                       # bu oynanışta kazanılan skor (artış)
-      "username": "Kapi",                # (opsiyonel) oyun içi görünen ad
-      "telegram_username": "kapi_official"  # (opsiyonel) @handle
-    }
-    """
     body = await request.json()
     try:
         user_id = int(body["user_id"])
@@ -145,7 +130,7 @@ async def post_score(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Bad payload")
 
-    # Token doğrulama
+    # token doğrulama
     try:
         payload = signer.unsign(token, max_age=1800).decode()
     except BadSignature:
@@ -154,7 +139,6 @@ async def post_score(request: Request):
     if payload != f"{user_id}:{chat_id}:{message_id}":
         raise HTTPException(status_code=403, detail="Token mismatch")
 
-    # Kümülatif skor: upsert + RETURNING
     upsert_sql = """
     INSERT INTO scores (user_id, username, telegram_username, score)
     VALUES (:uid, :uname, :tg, :inc)
