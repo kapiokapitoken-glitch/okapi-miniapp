@@ -26,7 +26,7 @@
       user-select: none; -webkit-user-select: none;
     }
 
-    /* FULLSCREEN button */
+    /* FULLSCREEN button (masaüstü için) */
     #kr-fullscreen {
       position: fixed; right: 12px; top: 12px; z-index: 99999;
       padding: 8px 12px; border: 0; border-radius: 10px;
@@ -48,13 +48,21 @@
       text-align: center; padding: 24px;
     }
 
-    /* 🔄 Rotate hint (MOBILE flow) */
-    #rotate-hint {
-      position: fixed; inset: 0; display: none; place-items: center; z-index: 99998;
-      background: rgba(0,0,0,.8); color: #fff; text-align: center; padding: 28px;
-      font: 700 18px/1.6 system-ui, Arial;
+    /* 🛠 Score Inspector overlay */
+    #kr-inspector {
+      position: fixed; right: 12px; bottom: 70px; z-index: 99999;
+      width: min(92vw, 420px); max-height: 60vh; overflow: auto;
+      background: rgba(0,0,0,.85); color:#fff; border-radius: 12px; padding: 10px;
+      display: none;
     }
-    #rotate-hint small { display:block; opacity:.8; font-weight:600; margin-top:.5rem; }
+    #kr-inspector h3 { margin: 0 0 8px 0; font:700 14px system-ui,Arial; }
+    #kr-inspector .item {
+      display:flex; justify-content:space-between; align-items:center;
+      padding:8px; border-radius:8px; margin-bottom:6px; background:rgba(255,255,255,.06);
+      cursor:pointer;
+    }
+    #kr-inspector .item.active { outline:2px solid #10b981; }
+    #kr-inspector small { opacity:.75; }
   </style>
 
   <!-- 🔹 HOOK & SCORE (main.js’DEN ÖNCE) -->
@@ -66,7 +74,22 @@
     const __msg_id   = __params.get('m');
     const __token    = __params.get('t');
 
-    // --- Score POST (global) ---
+    // Badge update
+    let __uiScore = 0;
+    function updateScore(newScore){
+      __uiScore = Number(newScore)||0;
+      const box = document.getElementById('score-display');
+      if (box) box.textContent = "$OKAPI: " + __uiScore;
+    }
+    window.updateScore = updateScore;
+
+    // Manual report API (Construct’tan çağrılabilir)
+    window.KAPI_reportScore = function(s){
+      const n = Number(s)||0;
+      __internal.updateFromValue(n, "manual");
+    };
+
+    // Score POST
     async function submitScore(finalScore, username){
       try{
         if (!__user_id || !__chat_id || !__msg_id || !__token) {
@@ -94,108 +117,174 @@
     window.submitScore = submitScore;
     window.KAPI_sendScore = submitScore;
 
-    // --- $OKAPI badge (global) ---
-    let __uiScore = 0;
-    function updateScore(newScore){
-      __uiScore = Number(newScore)||0;
-      const box = document.getElementById('score-display');
-      if (box) box.textContent = "$OKAPI: " + __uiScore;
-    }
-    window.updateScore = updateScore;
-
-    // --- Auto score detect (Construct hook) ---
+    // ---- Runtime + detection shared state ----
     let SCORE_KEY = null;
     window.KAPI_SET_SCORE_KEY = k => { SCORE_KEY = k; console.log('[KAPI] SCORE_KEY set:', k); };
-
     const CANDIDATE_KEYS = ['Score','Skor','Puan','Points','Point','Coin','Coins','OKAPI','Okapi'];
-    let lastValues = {}; let lastPeak = 0; let inRun = false; let submitted = false; let idleTicks = 0; let lastShown = -1;
 
-    (function hookC3Runtime(){
-      function attachHook(){
-        try{
-          if (!self.C3_CreateRuntime) return false;
-          if (self.C3_CreateRuntime.__wrapped) return true;
+    const __internal = {
+      rt: null,
+      lastValues: {},
+      lastShown: -1,
+      lastPeak:  0,
+      inRun:     false,
+      submitted: false,
+      idleTicks: 0,
 
-          const orig = self.C3_CreateRuntime;
-          self.C3_CreateRuntime = function(cfg){
-            const rt = orig(cfg);
-            try{
-              window.__c3rt = rt;
-
-              setInterval(()=>{
-                const gv = (rt && rt.globalVars) ? rt.globalVars : {};
-                let num = NaN;
-
-                if (SCORE_KEY && typeof gv[SCORE_KEY] !== 'undefined'){
-                  num = Number(gv[SCORE_KEY]);
-                } else {
-                  for (const k of CANDIDATE_KEYS){
-                    if (typeof gv[k] !== 'undefined'){
-                      const v = Number(gv[k]);
-                      if (!Number.isNaN(v)){ num = v; SCORE_KEY = k; break; }
-                    }
-                  }
-                  if (Number.isNaN(num)){
-                    let bestKey=null,bestDelta=0;
-                    for (const [k,vRaw] of Object.entries(gv)){
-                      const v = Number(vRaw); if (Number.isNaN(v)) continue;
-                      const prev = lastValues[k];
-                      const d = (typeof prev==='number') ? (v - prev) : 0;
-                      if (d > bestDelta && d < 1e6){ bestDelta=d; bestKey=k; num=v; }
-                    }
-                    if (bestKey) SCORE_KEY=bestKey;
-                  }
-                }
-
-                for (const [k,v] of Object.entries(gv)){
-                  const n = Number(v); if (!Number.isNaN(n)) lastValues[k]=n;
-                }
-
-                if (!Number.isNaN(num) && num !== lastShown){
-                  lastShown = num; updateScore(num);
-                }
-
-                if (!Number.isNaN(num) && num > 0){ inRun = true; lastPeak = Math.max(lastPeak, num); }
-
-                let go=false;
-                try{
-                  const g = rt.globalVars;
-                  go = !!(g && (g.GameOver===1 || g.GameOver===true || g.IsGameOver===1 || g.Game_Over===1 || g.dead===1 || g.Dead===1));
-                }catch(_){}
-
-                if (!Number.isNaN(num) && num === lastShown) idleTicks++; else idleTicks=0;
-
-                if (go && inRun && !submitted){ submitted=true; submitScore(lastPeak); }
-                if (idleTicks>=10 && inRun && !submitted){ submitted=true; submitScore(lastPeak); }
-
-                if (submitted && (Number.isNaN(num) || num===0)){
-                  lastValues={}; lastPeak=0; inRun=false; submitted=false; idleTicks=0; lastShown=-1;
-                }
-              }, 300);
-            }catch(e){ console.warn('[KAPI] hook error', e); }
-            return rt;
-          };
-          self.C3_CreateRuntime.__wrapped = true;
-          return true;
-        }catch(e){ return false; }
+      updateFromValue(v){
+        const num = Number(v); if (Number.isNaN(num)) return;
+        if (num !== this.lastShown){ this.lastShown = num; updateScore(num); this.idleTicks=0; }
+        else { this.idleTicks++; }
+        if (num > 0){ this.inRun = true; this.lastPeak = Math.max(this.lastPeak, num); }
+        if (this.idleTicks >= 10 && this.inRun && !this.submitted){ this.submitted = true; submitScore(this.lastPeak); }
+        if (this.submitted && num===0){ this.reset(); }
+      },
+      reset(){
+        this.lastValues={}; this.lastShown=-1; this.lastPeak=0; this.inRun=false; this.submitted=false; this.idleTicks=0;
       }
-      if (!attachHook()){
-        let tries=0; const iv=setInterval(()=>{ tries++; if (attachHook()||tries>50) clearInterval(iv); }, 100);
+    };
+
+    function initRuntime(rt){
+      if (!rt || __internal.rt) return;
+      __internal.rt = rt;
+      window.__c3rt = rt;
+
+      // Inspector UI
+      buildInspectorUI();
+
+      setInterval(()=>{
+        const gv = (rt && rt.globalVars) ? rt.globalVars : {};
+        let num = NaN;
+
+        if (SCORE_KEY && typeof gv[SCORE_KEY] !== 'undefined'){
+          num = Number(gv[SCORE_KEY]);
+        } else {
+          for (const k of CANDIDATE_KEYS){
+            if (typeof gv[k] !== 'undefined'){
+              const v = Number(gv[k]);
+              if (!Number.isNaN(v)){ num = v; SCORE_KEY = k; break; }
+            }
+          }
+          if (Number.isNaN(num)){
+            let bestKey=null,bestDelta=0;
+            for (const [k,vRaw] of Object.entries(gv)){
+              const v = Number(vRaw); if (Number.isNaN(v)) continue;
+              const prev = __internal.lastValues[k];
+              const d = (typeof prev==='number') ? (v - prev) : 0;
+              if (d > bestDelta && d < 1e6){ bestDelta=d; bestKey=k; num=v; }
+            }
+            if (bestKey) SCORE_KEY=bestKey;
+          }
+        }
+
+        for (const [k,v] of Object.entries(gv)){
+          const n = Number(v); if (!Number.isNaN(n)) __internal.lastValues[k]=n;
+        }
+
+        if (!Number.isNaN(num)) __internal.updateFromValue(num);
+
+        // GameOver tahmini
+        let go=false;
+        try{
+          const g = rt.globalVars;
+          go = !!(g && (g.GameOver===1 || g.GameOver===true || g.IsGameOver===1 || g.Game_Over===1 || g.dead===1 || g.Dead===1));
+        }catch(_){}
+
+        if (go && __internal.inRun && !__internal.submitted){ __internal.submitted=true; submitScore(__internal.lastPeak); }
+      }, 300);
+    }
+
+    // Hook strategy 1: wrap C3_CreateRuntime
+    (function hookCreateRuntime(){
+      const tryWrap = ()=>{
+        if (!self.C3_CreateRuntime) return false;
+        if (self.C3_CreateRuntime.__wrapped) return true;
+        const orig = self.C3_CreateRuntime;
+        self.C3_CreateRuntime = function(cfg){
+          const rt = orig(cfg);
+          try { initRuntime(rt); } catch(e){ console.warn('[KAPI] initRuntime wrap error', e); }
+          return rt;
+        };
+        self.C3_CreateRuntime.__wrapped = true;
+        return true;
+      };
+      if (!tryWrap()){
+        let tries=0; const iv=setInterval(()=>{ tries++; if (tryWrap()||tries>50) clearInterval(iv); }, 100);
       }
     })();
 
+    // Hook strategy 2: cr_getC3Runtime fallback
+    (function hookCrGetter(){
+      let tries=0;
+      const iv=setInterval(()=>{
+        tries++;
+        try{
+          const rt = (typeof window.cr_getC3Runtime === 'function') ? window.cr_getC3Runtime() : null;
+          if (rt){ initRuntime(rt); clearInterval(iv); }
+          if (tries>80) clearInterval(iv);
+        }catch(_){}
+      }, 125);
+    })();
+
+    // Inspector UI
+    function buildInspectorUI(){
+      if (document.getElementById('kr-inspector')) return;
+      const box = document.createElement('div');
+      box.id = 'kr-inspector';
+      box.innerHTML = `
+        <h3>🛠 Select your score variable</h3>
+        <div id="kr-inspector-list"></div>
+        <small>İpucu: $OKAPI rozeti artmıyorsa listeden doğru değişkeni seç.</small>
+      `;
+      document.body.appendChild(box);
+
+      const badge = document.getElementById('score-display');
+      if (badge){
+        let lastTap=0, pressT=null;
+        badge.addEventListener('pointerdown', ()=>{
+          const now=Date.now();
+          if (now-lastTap<350){ toggleInspector(); }
+          lastTap=now;
+          pressT=setTimeout(toggleInspector, 600);
+        });
+        badge.addEventListener('pointerup', ()=>{ clearTimeout(pressT); });
+        badge.addEventListener('pointerleave', ()=>{ clearTimeout(pressT); });
+      }
+    }
+    function toggleInspector(){
+      const el = document.getElementById('kr-inspector');
+      if (!el) return;
+      el.style.display = (el.style.display==='none'||!el.style.display)?'block':'none';
+    }
+    function refreshInspector(gv){
+      const list = document.getElementById('kr-inspector-list');
+      if (!list) return;
+      const items = [];
+      for (const [k,v] of Object.entries(gv)){
+        const n = Number(v);
+        if (!Number.isNaN(n)) items.push({k,v:n});
+      }
+      items.sort((a,b)=>b.v-a.v);
+      list.innerHTML = items.slice(0,50).map(({k,v})=>{
+        const act = (k===SCORE_KEY)?'active':'';
+        return `<div class="item ${act}" data-k="${k}"><strong>${k}</strong><span>${v}</span></div>`;
+      }).join('') || '<small>No numeric global variables found.</small>';
+
+      for (const div of list.querySelectorAll('.item')){
+        div.onclick = ()=>{ SCORE_KEY = div.getAttribute('data-k'); toggleInspector(); };
+      }
+    }
+
     // Helpers
     function isMobile(){ return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent); }
-    function isTelegram(){ return !!(window.Telegram) || /Telegram/i.test(navigator.userAgent); }
-    function isLandscape(){ return window.innerWidth > window.innerHeight; }
 
-    // Fullscreen (generic)
+    // Fullscreen (desktop)
     async function tryFullscreen(){
       const el = document.documentElement;
       const req = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
       if (req) {
         try { await req.call(el); document.getElementById('fs-hint').style.display='none'; }
-        catch(e){ /* some clients need a user gesture later */ }
+        catch(e){ /* first user gesture may be required */ }
       }
     }
   </script>
@@ -207,11 +296,9 @@
 
   <!-- Desktop fs ipucu -->
   <div id="fs-hint">Tap/click once to enter fullscreen</div>
-  <!-- 🔄 Mobile rotate ipucu -->
-  <div id="rotate-hint">
-    Rotate your phone to landscape for fullscreen
-    <small>(If it doesn't enter fullscreen automatically, tap once.)</small>
-  </div>
+
+  <!-- 🛠 Inspector -->
+  <div id="kr-inspector"></div>
 
   <!-- Game files -->
   <script src="scripts/supportcheck.js"></script>
@@ -225,10 +312,9 @@
   <script>
     const debugBtn = document.getElementById('kr-debug');
     const fsHint   = document.getElementById('fs-hint');
-    const rotHint  = document.getElementById('rotate-hint');
     const fsBtn    = document.getElementById('kr-fullscreen');
 
-    // Show debug button with ?debug=1
+    // Debug görünümü
     (function showDebugIfRequested(){
       const inTelegram = !!(__user_id && __chat_id && __msg_id && __token);
       const debug = new URLSearchParams(location.search).get('debug') === '1';
@@ -238,51 +324,32 @@
       }
     })();
 
-    // Desktop flow: open new tab with fs=1; Mobile Telegram: show rotate hint then fullscreen on landscape
-    function buildFsUrl(){
-      const base = location.origin + location.pathname;
-      const qs = new URLSearchParams(location.search);
-      qs.set('fs','1');
-      return base + '?' + qs.toString() + location.hash; // keep hash → scoring works
-    }
-
-    function openFullscreenFlow(){
-      if (isTelegram() && isMobile()){
-        // 1) Gentle try now (often blocked), then show ROTATE overlay
+    // 🔕 Mobilde FULLSCREEN butonunu gizle (fullscreen devre dışı)
+    if (isMobile()){
+      fsBtn.style.display = 'none';
+    } else {
+      // Masaüstü: fs=1 ile açıldıysa ipucunu göster + ilk tıkta full screen
+      const wantFs = new URLSearchParams(location.search).get('fs') === '1';
+      if (wantFs){
+        fsHint.style.display='grid';
         tryFullscreen();
-        rotHint.style.display = 'grid';
+        window.addEventListener('pointerdown', async ()=>{ await tryFullscreen(); }, { once:true });
+        document.addEventListener('fullscreenchange', ()=>{
+          if (document.fullscreenElement) fsHint.style.display='none';
+        });
+      }
 
-        const onRotate = async () => {
-          if (isLandscape()) {
-            rotHint.style.display = 'none';
-            window.removeEventListener('resize', onRotate);
-            window.removeEventListener('orientationchange', onRotate);
-            await tryFullscreen();
-          }
-        };
-        window.addEventListener('resize', onRotate);
-        window.addEventListener('orientationchange', onRotate);
-
-        // fallback: first tap after the hint
-        rotHint.addEventListener('pointerdown', async () => { await tryFullscreen(); }, { once:true });
-
-      } else {
-        // Desktop / non-Telegram: open new tab with fs=1 (shows fs-hint)
+      // FULLSCREEN butonu: yeni sekmeye fs=1 ile aç
+      function buildFsUrl(){
+        const base = location.origin + location.pathname;
+        const qs = new URLSearchParams(location.search);
+        qs.set('fs','1');
+        return base + '?' + qs.toString() + location.hash; // hash korunur → skor çalışır
+      }
+      fsBtn.addEventListener('click', ()=>{
         const url = buildFsUrl();
         const win = window.open(url, '_blank', 'noopener');
         if (!win) location.href = url;
-      }
-    }
-    fsBtn.addEventListener('click', openFullscreenFlow);
-
-    // Desktop fs flow (fs=1 tab): show hint & try fullscreen at first interaction
-    const wantFs = new URLSearchParams(location.search).get('fs') === '1';
-    if (wantFs){
-      fsHint.style.display='grid';
-      tryFullscreen(); // immediate try
-      window.addEventListener('pointerdown', async ()=>{ await tryFullscreen(); }, { once:true });
-      document.addEventListener('fullscreenchange', ()=>{
-        if (document.fullscreenElement) fsHint.style.display='none';
       });
     }
 
@@ -290,6 +357,13 @@
     if (window.Telegram && Telegram.WebApp) {
       try { Telegram.WebApp.expand(); Telegram.WebApp.ready(); } catch(_){}
     }
+
+    // Inspector periyodik yenileme
+    setInterval(()=>{
+      if (window.__c3rt && window.__c3rt.globalVars){
+        refreshInspector(window.__c3rt.globalVars);
+      }
+    }, 500);
   </script>
 </body>
 </html>
