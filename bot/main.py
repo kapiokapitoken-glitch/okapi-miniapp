@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, PlainTextResponse
 from itsdangerous import TimestampSigner, BadSignature
 
-from telegram import Update, Bot
+from telegram import Update
 from telegram.ext import (
     Application, ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 )
@@ -25,7 +25,6 @@ signer = TimestampSigner(SECRET)
 # ---------- FastAPI & PTB ----------
 app = FastAPI()
 tg_app: Application = ApplicationBuilder().token(BOT_TOKEN).build()
-plain_bot = Bot(token=BOT_TOKEN)  # sadece Update.de_json parse için
 
 # ---------- Handlers ----------
 async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -39,7 +38,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         err = f"send_game error: {e}"
         log.error(err)
-        # kullanıcıya da göster, teşhis kolaylaşsın
         await context.bot.send_message(chat_id=chat_id, text=f"⚠️ {err}")
 
 tg_app.add_handler(CommandHandler("ping", cmd_ping))
@@ -64,7 +62,8 @@ tg_app.add_handler(CallbackQueryHandler(on_callback))
 # ---------- PTB lifecycle ----------
 @app.on_event("startup")
 async def _on_startup():
-    await tg_app.initialize()     # Application.bot kullanılabilir hale gelir
+    # Application'ı initialize ediyoruz; tg_app.bot artık initialized
+    await tg_app.initialize()
     log.info("PTB Application initialized.")
 
 @app.on_event("shutdown")
@@ -72,34 +71,19 @@ async def _on_shutdown():
     await tg_app.shutdown()
     log.info("PTB Application shutdown.")
 
-# ---------- Raw route (routing testi için) ----------
+# ---------- Basit kontrol route'u ----------
 @app.get("/bot/check")
 def bot_check():
-    # CDN -> Compute /bot route'u çalışıyor mu hızlı bakış
     return PlainTextResponse("bot route OK")
 
 # ---------- Webhook endpoint ----------
 @app.post("/bot/webhook")
 async def tg_webhook(request: Request):
-    try:
-        data = await request.json()
-    except Exception:
-        log.error("Webhook: JSON parse edilemedi")
-        return JSONResponse({"ok": True, "note": "no-json"})
-
+    data = await request.json()
     log.info("Webhook hit ✓")
-    # önce güvenli parse dene; patlarsa logla ve yine 200 dön (Telegram beklemesin)
-    try:
-        update = Update.de_json(data, plain_bot)
-    except Exception as e:
-        log.error("Update.parse hata: %s | body: %s", e, data)
-        return JSONResponse({"ok": True, "note": "parse-failed"})
-
-    try:
-        await tg_app.process_update(update)
-    except Exception as e:
-        log.error("process_update hata: %s", e)
-        # yine de 200 dön (Telegram tekrar denemesin)
+    # ARTIK initialize edilmiş botu kullanıyoruz:
+    update = Update.de_json(data, tg_app.bot)
+    await tg_app.process_update(update)
     return JSONResponse({"ok": True})
 
 # ---------- Score endpoint ----------
