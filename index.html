@@ -1,33 +1,99 @@
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="UTF-8">
-<title>Scary Run</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no">
+  <meta charset="UTF-8">
+  <title>Scary Run</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no">
 
-<meta name="generator" content="Construct 3">
-	<meta name="author" content="GamesMasters">
-	<meta name="description" content="Game">
-	<link rel="manifest" href="appmanifest.json">
-	<link rel="apple-touch-icon" sizes="128x128" href="icons/icon-128.png">
-	<link rel="apple-touch-icon" sizes="256x256" href="icons/icon-256.png">
-	<link rel="icon" type="image/png" href="icons/icon-256.png">
+  <meta name="generator" content="Construct 3">
+  <meta name="author" content="GamesMasters">
+  <meta name="description" content="Game">
 
-<link rel="stylesheet" href="style.css">
+  <link rel="manifest" href="appmanifest.json">
+  <link rel="apple-touch-icon" sizes="128x128" href="icons/icon-128.png">
+  <link rel="apple-touch-icon" sizes="256x256" href="icons/icon-256.png">
+  <link rel="icon" type="image/png" href="icons/icon-256.png">
 
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div id="fb-root"></div>
+  <div id="fb-root"></div>
 
-	<noscript>
-		<div id="notSupportedWrap">
-			<h2 id="notSupportedTitle">This content requires JavaScript</h2>
-			<p class="notSupportedMessage">JavaScript appears to be disabled. Please enable it to view this content.</p>
-		</div>
-	</noscript>
-	<script src="scripts/supportcheck.js"></script>
-	<script src="scripts/offlineclient.js" type="module"></script>
-	<script src="scripts/main.js" type="module"></script>
-	<script src="scripts/register-sw.js" type="module"></script>
+  <noscript>
+    <div id="notSupportedWrap">
+      <h2 id="notSupportedTitle">This content requires JavaScript</h2>
+      <p class="notSupportedMessage">JavaScript appears to be disabled. Please enable it to view this content.</p>
+    </div>
+  </noscript>
+
+  <!-- Oyun dosyaların -->
+  <script src="scripts/supportcheck.js"></script>
+  <script src="scripts/offlineclient.js" type="module"></script>
+  <script src="scripts/main.js" type="module"></script>
+  <script src="scripts/register-sw.js" type="module"></script>
+
+  <!-- Telegram Games SDK -->
+  <script src="https://telegram.org/js/games.js"></script>
+
+  <!-- Telegram skor entegrasyonu -->
+  <script>
+    // URL fragment (#u=...&c=...&m=...&t=...) içinden parametreleri al
+    const params = new URLSearchParams(location.hash.slice(1));
+    const user_id    = params.get('u');
+    const chat_id    = params.get('c');
+    const message_id = params.get('m');
+    const token      = params.get('t');
+
+    // Skor gönderme fonksiyonu — oyunda Game Over olduğunda bunu çağır
+    async function submitScore(finalScore) {
+      try {
+        if (!user_id || !chat_id || !message_id || !token) {
+          console.warn("Not in Telegram context; skipping score submit.");
+          return;
+        }
+        const res = await fetch('/api/score', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            user_id,
+            chat_id,
+            message_id,
+            token,
+            score: Number(finalScore) || 0
+          })
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok || !j.ok) console.error('Score submit failed:', j);
+      } catch (e) {
+        console.error('Score submit error:', e);
+      }
+    }
+
+    // Global erişim: oyun JS'in içinden window.submitScore(...) diye çağırabil
+    window.submitScore = submitScore;
+
+    // Geçici test butonu — her şey çalıştıktan sonra silebilirsin
+    window.addEventListener('DOMContentLoaded', () => {
+      const btn = document.createElement('button');
+      btn.textContent = 'TEST: Submit 123 score';
+      btn.style.position='fixed';
+      btn.style.right='16px';
+      btn.style.bottom='16px';
+      btn.style.zIndex='99999';
+      btn.onclick = () => submitScore(123);
+      document.body.appendChild(btn);
+    });
+
+    // Klavyeden hızlı test: "S" tuşu → 123 skor gönder
+    document.addEventListener('keydown', e => {
+      if (e.key.toLowerCase() === 's') submitScore(123);
+    });
+
+    // (Opsiyonel) WebApp görünümü uyumu
+    if (window.Telegram && Telegram.WebApp) {
+      Telegram.WebApp.expand();
+      Telegram.WebApp.ready();
+    }
+  </script>
 </body>
 </html>
