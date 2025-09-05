@@ -13,7 +13,7 @@
   <link rel="stylesheet" href="style.css">
 
   <style>
-    /* Skor rozeti (canlı gösterim) */
+    /* Canlı skor rozeti */
     #score-display {
       position: fixed; top: 12px; left: 12px;
       background: rgba(0,0,0,.6); color: #fff;
@@ -21,6 +21,15 @@
       font: 700 14px/1.4 system-ui, Arial;
       z-index: 99999;
       backdrop-filter: blur(2px);
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    /* Hızlı test butonu (mobil için) */
+    #kr-debug {
+      position: fixed; right: 12px; bottom: 12px; z-index: 99999;
+      padding: 10px 14px; border: 0; border-radius: 10px;
+      background: #0a84ff; color: #fff; font-size: 14px;
+      display: none;
     }
   </style>
 </head>
@@ -29,6 +38,8 @@
 
   <!-- Canlı skor rozeti -->
   <div id="score-display">Score: 0</div>
+  <!-- Hızlı test: ?debug=1 ile görünür -->
+  <button id="kr-debug">Test Skor (123)</button>
 
   <!-- Oyun dosyaların -->
   <script src="scripts/supportcheck.js"></script>
@@ -48,38 +59,74 @@
     const token      = params.get('t');
 
     const scoreBox = document.getElementById('score-display');
-    let score = 0;
+    const debugBtn = document.getElementById('kr-debug');
 
-    // ----- Skor gönderme -----
-    async function submitScore(finalScore) {
+    // ----- Skor gönderme köprüsü (global) -----
+    async function submitScore(finalScore, username) {
       try {
         if (!user_id || !chat_id || !message_id || !token) {
-          console.warn("Not in Telegram context; skipping score submit.");
-          return;
+          console.warn("[KAPI] Not in Telegram context; skipping score submit.");
+          return false;
         }
         const res = await fetch('/api/score', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ user_id, chat_id, message_id, token, score: Number(finalScore)||0 })
+          body: JSON.stringify({
+            user_id: Number(user_id),
+            chat_id: Number(chat_id),
+            message_id: Number(message_id),
+            token,
+            score: Number(finalScore)||0,
+            username: username || null
+          })
         });
         const j = await res.json().catch(() => ({}));
-        if (!res.ok || !j.ok) console.error('Score submit failed:', j);
-        else console.log("Score submitted:", finalScore);
+        if (!res.ok || !j.ok) {
+          console.error('[KAPI] Score submit failed:', j);
+          return false;
+        }
+        console.log('[KAPI] Score submitted:', finalScore);
+        return true;
       } catch (e) {
-        console.error('Score submit error:', e);
+        console.error('[KAPI] Score submit error:', e);
+        return false;
       }
     }
-    window.submitScore = submitScore; // global erişim
+    window.submitScore = submitScore;         // mevcut ad
+    window.KAPI_sendScore = submitScore;      // alternatif ad
 
-    // ----- Canlı skor UI güncelleme -----
+    // ----- Canlı skor UI güncelleme (global) -----
+    let score = 0;
     function updateScore(newScore){
       score = Number(newScore) || 0;
       if (scoreBox) scoreBox.textContent = "Score: " + score;
     }
-    window.updateScore = updateScore; // oyun içinden de çağrılabilir
+    window.updateScore = updateScore;
 
-    // ----- Construct runtime hook: otomatik skor polling -----
+    // ----- Construct runtime hook: skor takibi + otomatik gönderim -----
     (function hookC3RuntimeAndAutoScore(){
+      let lastScore   = -1;
+      let lastPeak    = 0;
+      let idleTicks   = 0;
+      let inRun       = false;
+      let submitted   = false;
+
+      function maybeSubmit(reason){
+        if (!inRun || submitted || lastPeak <= 0) return;
+        submitted = true;
+        console.log('[KAPI] Auto submit by', reason, 'peak=', lastPeak);
+        submitScore(lastPeak);
+      }
+
+      function resetRunState(){
+        lastScore = -1;
+        lastPeak = 0;
+        idleTicks = 0;
+        inRun = false;
+        submitted = false;
+      }
+
+      // Construct runtime'a wrap
       function attachHook(){
         try {
           if (!self.C3_CreateRuntime || self.C3_CreateRuntime.__wrapped) return false;
@@ -100,16 +147,63 @@
                 } catch(e) { return 0; }
               };
 
-              // 300ms'de bir skoru kontrol et
-              let lastScore = -1;
+              // 300ms'de bir skoru kontrol et, GameOver tespiti yap
               setInterval(() => {
                 const s = (window.getScore && window.getScore()) || 0;
+
+                // UI güncelle
                 if (s !== lastScore) {
-                  lastScore = s;
                   if (window.updateScore) window.updateScore(s);
                 }
+
+                // Run durumu ve pik skor
+                if (s > 0) {
+                  inRun = true;
+                  lastPeak = Math.max(lastPeak, s);
+                }
+
+                // GameOver olabilecek global değişken isimleri
+                let gv = rt && rt.globalVars;
+                let go = false;
+                try {
+                  if (gv) {
+                    go = (gv.GameOver === 1 || gv.GameOver === true ||
+                          gv.IsGameOver === 1 || gv.Game_Over === 1 ||
+                          gv.dead === 1 || gv.Dead === 1);
+                  }
+                } catch(e){}
+
+                // Skor değişmiyorsa idle sayaç
+                if (s === lastScore) {
+                  idleTicks++;
+                } else {
+                  idleTicks = 0;
+                }
+
+                // Olası GameOver tetikleyicileri:
+                // 1) GameOver flag'i
+                if (go && inRun && !submitted) {
+                  maybeSubmit('flag');
+                }
+                // 2) Skor uzun süre değişmiyorsa (3 sn ~ 10 tick)
+                if (idleTicks >= 10 && inRun && !submitted) {
+                  maybeSubmit('idle');
+                }
+                // 3) Skor 0'a döndüyse ve daha önce koşu olduysa (reset)
+                if (s === 0 && lastScore > 0 && inRun && !submitted) {
+                  // küçük gecikme ile teyit
+                  setTimeout(() => { maybeSubmit('reset-to-zero'); }, 200);
+                }
+
+                // Yeni koşu için reset şartları:
+                // gönderim yapılmış ve skor 0 ise tam reset
+                if (submitted && s === 0) {
+                  resetRunState();
+                }
+
+                lastScore = s;
               }, 300);
-            } catch(e) {}
+            } catch(e) { console.warn('[KAPI] Hook error', e); }
             return rt;
           };
           self.C3_CreateRuntime.__wrapped = true;
@@ -126,15 +220,27 @@
       }
     })();
 
-    // Klavye kısayolu (test): S tuşu → 123 skor gönder
+    // Klavye kısayolu (masaüstü test): S → 123 skor gönder
     document.addEventListener('keydown', e => {
       if (e.key.toLowerCase() === 's') submitScore(123);
     });
 
+    // Mobil: ?debug=1 ile "Test Skor" butonunu göster
+    (function showDebugIfRequested(){
+      const inTelegram = !!(user_id && chat_id && message_id && token);
+      const debug = new URLSearchParams(location.search).get('debug') === '1';
+      if (inTelegram && debug && debugBtn) {
+        debugBtn.style.display = 'block';
+        debugBtn.onclick = async () => {
+          const ok = await submitScore(123);
+          alert(ok ? 'Skor gönderildi ✅' : 'Gönderilemedi ❌');
+        };
+      }
+    })();
+
     // (Opsiyonel) Telegram WebApp görünümü uyumu
     if (window.Telegram && Telegram.WebApp) {
-      Telegram.WebApp.expand();
-      Telegram.WebApp.ready();
+      try { Telegram.WebApp.expand(); Telegram.WebApp.ready(); } catch(_){}
     }
   </script>
 </body>
