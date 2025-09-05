@@ -22,49 +22,6 @@
       z-index: 99999;
       backdrop-filter: blur(2px);
     }
-
-    /* Alt sabit UI konteyneri */
-    #ui-container {
-      position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
-      display: flex; gap: 12px; z-index: 99999; flex-wrap: wrap;
-    }
-    .ui-btn {
-      padding: 10px 16px;
-      border-radius: 12px;
-      border: none;
-      font-size: 16px;
-      cursor: pointer;
-      font-weight: 700;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.25);
-      transition: transform .18s ease, box-shadow .18s ease, opacity .18s ease;
-      opacity: .98;
-    }
-    .ui-btn:hover { transform: translateY(-2px) scale(1.02); box-shadow: 0 6px 16px rgba(0,0,0,.35); opacity: 1; }
-    #btn-play {
-      background: linear-gradient(135deg, #2ecc71, #27ae60); color: #fff;
-    }
-    #btn-leaderboard {
-      background: linear-gradient(135deg, #3a3a3a, #1f1f1f); color: #fff;
-    }
-
-    /* Leaderboard popup */
-    #leaderboard{
-      position:fixed; left:50%; top:10%; transform:translateX(-50%);
-      background:rgba(0,0,0,.85); color:#fff; padding:16px 20px;
-      border-radius:14px; font:14px/1.45 system-ui,Arial;
-      max-width:90vw; z-index:99998; display:none; min-width:260px;
-      box-shadow: 0 10px 30px rgba(0,0,0,.45);
-    }
-    #leaderboard h3{margin:0 0 10px; font-size:18px}
-    #leaderboard ol{margin:0; padding-left:22px; max-height:50vh; overflow:auto}
-    #leaderboard .close{position:absolute; right:10px; top:8px; cursor:pointer; font-size:18px; opacity:.9}
-    #leaderboard .close:hover{opacity:1}
-
-    /* Mobil iyileştirmeler */
-    @media (max-width: 500px) {
-      #ui-container { flex-direction: column; bottom: 10px; }
-      .ui-btn { width: calc(100vw - 32px); }
-    }
   </style>
 </head>
 <body>
@@ -82,22 +39,6 @@
   <!-- Telegram Games SDK -->
   <script src="https://telegram.org/js/games.js"></script>
 
-  <!-- Alt sabit UI butonları -->
-  <div id="ui-container">
-    <button id="btn-play" class="ui-btn">▶️ Play KAPI RUN</button>
-    <button id="btn-leaderboard" class="ui-btn">🏆 Leaderboard</button>
-  </div>
-
-  <!-- Leaderboard popup -->
-  <div id="leaderboard">
-    <span class="close" onclick="this.parentNode.style.display='none'">✕</span>
-    <h3>🏆 Leaderboard</h3>
-    <ol id="lb-list"></ol>
-  </div>
-
-  <!-- (İsteğe bağlı) Tık sesi: sounds/click.mp3 dosyasını eklersen aktif olur -->
-  <audio id="click-sound" src="sounds/click.mp3" preload="auto"></audio>
-
   <script>
     // URL fragment (#u=...&c=...&m=...&t=...) içinden parametreleri al
     const params = new URLSearchParams(location.hash.slice(1));
@@ -107,7 +48,7 @@
     const token      = params.get('t');
 
     const scoreBox = document.getElementById('score-display');
-    const clickSfx = document.getElementById('click-sound');
+    let score = 0;
 
     // ----- Skor gönderme -----
     async function submitScore(finalScore) {
@@ -123,7 +64,7 @@
         });
         const j = await res.json().catch(() => ({}));
         if (!res.ok || !j.ok) console.error('Score submit failed:', j);
-        else alert("Game Over! Skorun: " + (Number(finalScore)||0) + " ✅");
+        else console.log("Score submitted:", finalScore);
       } catch (e) {
         console.error('Score submit error:', e);
       }
@@ -131,55 +72,63 @@
     window.submitScore = submitScore; // global erişim
 
     // ----- Canlı skor UI güncelleme -----
-    let score = 0;
     function updateScore(newScore){
       score = Number(newScore) || 0;
       if (scoreBox) scoreBox.textContent = "Score: " + score;
     }
-    window.updateScore = updateScore; // oyunun içinden çağır: updateScore(x)
+    window.updateScore = updateScore; // oyun içinden de çağrılabilir
 
-    // ----- Leaderboard -----
-    async function showLeaderboard(){
-      if (!chat_id || !message_id) { console.warn('LB: not in Telegram context'); return; }
-      try{
-        const res = await fetch(`/api/highscores?chat_id=${chat_id}&message_id=${message_id}`);
-        const j = await res.json();
-        if (!j.ok) throw new Error('highscores not ok');
-        const list = document.getElementById('lb-list');
-        list.innerHTML = '';
-        j.items.forEach(row => {
-          const li = document.createElement('li');
-          // İlk 3'e madalya
-          let medal = "";
-          if (row.pos === 1) medal = "🥇 ";
-          else if (row.pos === 2) medal = "🥈 ";
-          else if (row.pos === 3) medal = "🥉 ";
-          li.textContent = `${medal}${row.pos}. ${row.name} — ${row.score}`;
-          list.appendChild(li);
-        });
-        document.getElementById('leaderboard').style.display = 'block';
-      }catch(e){
-        console.error('LB error', e);
+    // ----- Construct runtime hook: otomatik skor polling -----
+    (function hookC3RuntimeAndAutoScore(){
+      function attachHook(){
+        try {
+          if (!self.C3_CreateRuntime || self.C3_CreateRuntime.__wrapped) return false;
+
+          const origCreate = self.C3_CreateRuntime;
+          self.C3_CreateRuntime = function(cfg){
+            const rt = origCreate(cfg);
+            try {
+              window.__c3rt = rt;
+
+              // Skor okuma fonksiyonu
+              window.getScore = function(){
+                try {
+                  if (rt && rt.globalVars && typeof rt.globalVars.Score !== 'undefined') {
+                    return Number(rt.globalVars.Score) || 0;
+                  }
+                  return 0;
+                } catch(e) { return 0; }
+              };
+
+              // 300ms'de bir skoru kontrol et
+              let lastScore = -1;
+              setInterval(() => {
+                const s = (window.getScore && window.getScore()) || 0;
+                if (s !== lastScore) {
+                  lastScore = s;
+                  if (window.updateScore) window.updateScore(s);
+                }
+              }, 300);
+            } catch(e) {}
+            return rt;
+          };
+          self.C3_CreateRuntime.__wrapped = true;
+          return true;
+        } catch(e) { return false; }
       }
-    }
-    window.showLeaderboard = showLeaderboard;
 
-    // ----- Buton davranışları -----
-    document.getElementById('btn-play').onclick = () => {
-      try { clickSfx && clickSfx.play().catch(()=>{}); } catch(_) {}
-      // Oyunu başlat/yeniden başlat. Kendi oyun start fonksiyonunu biliyorsan burada çağır.
-      location.reload(); // basit ve garanti çözüm
-    };
-    document.getElementById('btn-leaderboard').onclick = () => {
-      try { clickSfx && clickSfx.play().catch(()=>{}); } catch(_) {}
-      showLeaderboard();
-    };
+      if (!attachHook()){
+        let tries = 0;
+        const iv = setInterval(() => {
+          tries++;
+          if (attachHook() || tries > 50) clearInterval(iv);
+        }, 100);
+      }
+    })();
 
-    // ----- Klavye kısayolları (hızlı test) -----
+    // Klavye kısayolu (test): S tuşu → 123 skor gönder
     document.addEventListener('keydown', e => {
-      const k = e.key.toLowerCase();
-      if (k === 's') submitScore(123);   // S: test skoru gönder
-      if (k === 'l') showLeaderboard();  // L: leaderboard aç
+      if (e.key.toLowerCase() === 's') submitScore(123);
     });
 
     // (Opsiyonel) Telegram WebApp görünümü uyumu
