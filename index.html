@@ -14,10 +14,9 @@
   <link rel="stylesheet" href="style.css">
 
   <style>
-    /* Sayfa zemini – canvas'ı Construct yönetsin, oran bozulmasın */
     html, body { height:100%; margin:0; background:#000; overflow:hidden; }
 
-    /* $OKAPI rozeti ve butonlar (canvas üstü) */
+    /* $OKAPI badge */
     #score-display {
       position: fixed; top: 12px; left: 12px;
       background: rgba(0,0,0,.6); color: #fff;
@@ -26,34 +25,48 @@
       z-index: 99999; backdrop-filter: blur(2px);
       user-select: none; -webkit-user-select: none;
     }
+
+    /* FULLSCREEN button */
     #kr-fullscreen {
       position: fixed; right: 12px; top: 12px; z-index: 99999;
       padding: 8px 12px; border: 0; border-radius: 10px;
       background: #10b981; color: #081c15; font-weight: 700; font-size: 13px;
       box-shadow: 0 4px 14px rgba(0,0,0,.15); cursor: pointer;
     }
+
+    /* Debug test button (optional) */
     #kr-debug {
       position: fixed; right: 12px; bottom: 12px; z-index: 99999;
       padding: 10px 14px; border: 0; border-radius: 10px;
       background: #0a84ff; color: #fff; font-size: 14px; display: none;
     }
+
+    /* Desktop fs ipucu (fs=1’le açılan sayfada) */
     #fs-hint {
       position: fixed; inset: 0; display: none; place-items: center; z-index: 99998;
       background: rgba(0,0,0,.55); color: #fff; font: 600 16px/1.6 system-ui, Arial;
       text-align: center; padding: 24px;
     }
+
+    /* 🔄 Rotate hint (MOBILE flow) */
+    #rotate-hint {
+      position: fixed; inset: 0; display: none; place-items: center; z-index: 99998;
+      background: rgba(0,0,0,.8); color: #fff; text-align: center; padding: 28px;
+      font: 700 18px/1.6 system-ui, Arial;
+    }
+    #rotate-hint small { display:block; opacity:.8; font-weight:600; margin-top:.5rem; }
   </style>
 
-  <!-- 🔹 ÖNCE: Skor, hook ve param fonksiyonları (main.js’DEN ÖNCE) -->
+  <!-- 🔹 HOOK & SCORE (main.js’DEN ÖNCE) -->
   <script>
-    // --- Telegram paramları (hash) ---
+    // --- TG hash params ---
     const __params   = new URLSearchParams(location.hash.slice(1));
     const __user_id  = __params.get('u');
     const __chat_id  = __params.get('c');
     const __msg_id   = __params.get('m');
     const __token    = __params.get('t');
 
-    // --- Skor Gönderme (global) ---
+    // --- Score POST (global) ---
     async function submitScore(finalScore, username){
       try{
         if (!__user_id || !__chat_id || !__msg_id || !__token) {
@@ -81,7 +94,7 @@
     window.submitScore = submitScore;
     window.KAPI_sendScore = submitScore;
 
-    // --- $OKAPI rozeti (global) ---
+    // --- $OKAPI badge (global) ---
     let __uiScore = 0;
     function updateScore(newScore){
       __uiScore = Number(newScore)||0;
@@ -90,8 +103,7 @@
     }
     window.updateScore = updateScore;
 
-    // --- Otomatik skor tespiti (Construct runtime hook) ---
-    // Kullanıcı isterse elle ayarlasın:
+    // --- Auto score detect (Construct hook) ---
     let SCORE_KEY = null;
     window.KAPI_SET_SCORE_KEY = k => { SCORE_KEY = k; console.log('[KAPI] SCORE_KEY set:', k); };
 
@@ -101,7 +113,6 @@
     (function hookC3Runtime(){
       function attachHook(){
         try{
-          // C3_CreateRuntime tanımlanmadan önce gelirsek, bir “retry” döngüsü kur
           if (!self.C3_CreateRuntime) return false;
           if (self.C3_CreateRuntime.__wrapped) return true;
 
@@ -118,14 +129,12 @@
                 if (SCORE_KEY && typeof gv[SCORE_KEY] !== 'undefined'){
                   num = Number(gv[SCORE_KEY]);
                 } else {
-                  // Aday isimler
                   for (const k of CANDIDATE_KEYS){
                     if (typeof gv[k] !== 'undefined'){
                       const v = Number(gv[k]);
                       if (!Number.isNaN(v)){ num = v; SCORE_KEY = k; break; }
                     }
                   }
-                  // Heuristik: artan sayısal değişkeni bul
                   if (Number.isNaN(num)){
                     let bestKey=null,bestDelta=0;
                     for (const [k,vRaw] of Object.entries(gv)){
@@ -138,34 +147,27 @@
                   }
                 }
 
-                // Son değerleri sakla
                 for (const [k,v] of Object.entries(gv)){
                   const n = Number(v); if (!Number.isNaN(n)) lastValues[k]=n;
                 }
 
-                // UI
                 if (!Number.isNaN(num) && num !== lastShown){
                   lastShown = num; updateScore(num);
                 }
 
-                // Peak ve run durumu
                 if (!Number.isNaN(num) && num > 0){ inRun = true; lastPeak = Math.max(lastPeak, num); }
 
-                // GameOver tahmini
                 let go=false;
                 try{
                   const g = rt.globalVars;
                   go = !!(g && (g.GameOver===1 || g.GameOver===true || g.IsGameOver===1 || g.Game_Over===1 || g.dead===1 || g.Dead===1));
                 }catch(_){}
 
-                // idle
                 if (!Number.isNaN(num) && num === lastShown) idleTicks++; else idleTicks=0;
 
-                // Gönder
                 if (go && inRun && !submitted){ submitted=true; submitScore(lastPeak); }
                 if (idleTicks>=10 && inRun && !submitted){ submitted=true; submitScore(lastPeak); }
 
-                // Yeni koşu reset
                 if (submitted && (Number.isNaN(num) || num===0)){
                   lastValues={}; lastPeak=0; inRun=false; submitted=false; idleTicks=0; lastShown=-1;
                 }
@@ -181,19 +183,37 @@
         let tries=0; const iv=setInterval(()=>{ tries++; if (attachHook()||tries>50) clearInterval(iv); }, 100);
       }
     })();
+
+    // Helpers
+    function isMobile(){ return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent); }
+    function isTelegram(){ return !!(window.Telegram) || /Telegram/i.test(navigator.userAgent); }
+    function isLandscape(){ return window.innerWidth > window.innerHeight; }
+
+    // Fullscreen (generic)
+    async function tryFullscreen(){
+      const el = document.documentElement;
+      const req = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+      if (req) {
+        try { await req.call(el); document.getElementById('fs-hint').style.display='none'; }
+        catch(e){ /* some clients need a user gesture later */ }
+      }
+    }
   </script>
 </head>
 <body>
-  <!-- $OKAPI rozeti -->
   <div id="score-display">$OKAPI: 0</div>
-  <!-- FULLSCREEN butonu -->
   <button id="kr-fullscreen">FULLSCREEN</button>
-  <!-- Hızlı test: ?debug=1 ile -->
   <button id="kr-debug">Test Skor (123)</button>
-  <!-- Tam ekran ipucu -->
-  <div id="fs-hint">Tam ekran için ekrana dokun ya da bir kez tıkla</div>
 
-  <!-- Oyun dosyaların (ARTIK hook’tan SONRA yükleniyor) -->
+  <!-- Desktop fs ipucu -->
+  <div id="fs-hint">Tap/click once to enter fullscreen</div>
+  <!-- 🔄 Mobile rotate ipucu -->
+  <div id="rotate-hint">
+    Rotate your phone to landscape for fullscreen
+    <small>(If it doesn't enter fullscreen automatically, tap once.)</small>
+  </div>
+
+  <!-- Game files -->
   <script src="scripts/supportcheck.js"></script>
   <script src="scripts/offlineclient.js" type="module"></script>
   <script src="scripts/main.js" type="module"></script>
@@ -205,9 +225,10 @@
   <script>
     const debugBtn = document.getElementById('kr-debug');
     const fsHint   = document.getElementById('fs-hint');
-    const openBtn  = document.getElementById('kr-fullscreen');
+    const rotHint  = document.getElementById('rotate-hint');
+    const fsBtn    = document.getElementById('kr-fullscreen');
 
-    // Mobil: ?debug=1 ile test butonunu göster
+    // Show debug button with ?debug=1
     (function showDebugIfRequested(){
       const inTelegram = !!(__user_id && __chat_id && __msg_id && __token);
       const debug = new URLSearchParams(location.search).get('debug') === '1';
@@ -217,47 +238,55 @@
       }
     })();
 
-    // --- FULLSCREEN: mobil Telegram'da aynı sekme, diğerlerinde yeni sekme ---
+    // Desktop flow: open new tab with fs=1; Mobile Telegram: show rotate hint then fullscreen on landscape
     function buildFsUrl(){
       const base = location.origin + location.pathname;
       const qs = new URLSearchParams(location.search);
       qs.set('fs','1');
-      return base + '?' + qs.toString() + location.hash; // hash korunur → skor çalışır
+      return base + '?' + qs.toString() + location.hash; // keep hash → scoring works
     }
-    function isMobile(){ return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent); }
-    function isTelegram(){ return !!(window.Telegram) || /Telegram/i.test(navigator.userAgent); }
 
-    function openBigScreen(){
-      const url = buildFsUrl();
+    function openFullscreenFlow(){
       if (isTelegram() && isMobile()){
-        // Telegram mobil webview: yeni sekme kısıtlı → aynı sekmede git
-        location.href = url;
-      } else {
-        const win = window.open(url, '_blank', 'noopener');
-        if (!win) location.href = url; // popup engeli varsa aynı sekme
-      }
-    }
-    openBtn.addEventListener('click', openBigScreen);
+        // 1) Gentle try now (often blocked), then show ROTATE overlay
+        tryFullscreen();
+        rotHint.style.display = 'grid';
 
-    // Yeni sayfada tam ekran dene (mobilde kimi istemciler jest isteyebilir)
-    const wantFs = new URLSearchParams(location.search).get('fs') === '1';
-    async function tryFullscreen(){
-      const el = document.documentElement;
-      if (el.requestFullscreen){
-        try { await el.requestFullscreen(); fsHint.style.display='none'; }
-        catch(e){ /* jest gerekebilir */ }
+        const onRotate = async () => {
+          if (isLandscape()) {
+            rotHint.style.display = 'none';
+            window.removeEventListener('resize', onRotate);
+            window.removeEventListener('orientationchange', onRotate);
+            await tryFullscreen();
+          }
+        };
+        window.addEventListener('resize', onRotate);
+        window.addEventListener('orientationchange', onRotate);
+
+        // fallback: first tap after the hint
+        rotHint.addEventListener('pointerdown', async () => { await tryFullscreen(); }, { once:true });
+
+      } else {
+        // Desktop / non-Telegram: open new tab with fs=1 (shows fs-hint)
+        const url = buildFsUrl();
+        const win = window.open(url, '_blank', 'noopener');
+        if (!win) location.href = url;
       }
     }
+    fsBtn.addEventListener('click', openFullscreenFlow);
+
+    // Desktop fs flow (fs=1 tab): show hint & try fullscreen at first interaction
+    const wantFs = new URLSearchParams(location.search).get('fs') === '1';
     if (wantFs){
-      tryFullscreen();
       fsHint.style.display='grid';
+      tryFullscreen(); // immediate try
       window.addEventListener('pointerdown', async ()=>{ await tryFullscreen(); }, { once:true });
       document.addEventListener('fullscreenchange', ()=>{
         if (document.fullscreenElement) fsHint.style.display='none';
       });
     }
 
-    // (Opsiyonel) Telegram WebApp görünümü
+    // Telegram WebApp cosmetics
     if (window.Telegram && Telegram.WebApp) {
       try { Telegram.WebApp.expand(); Telegram.WebApp.ready(); } catch(_){}
     }
