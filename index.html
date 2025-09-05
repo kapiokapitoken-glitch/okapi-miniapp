@@ -22,6 +22,14 @@
       z-index: 99999; backdrop-filter: blur(2px);
       user-select: none; -webkit-user-select: none;
     }
+    /* Büyük ekran butonu */
+    #kr-open-browser {
+      position: fixed; right: 12px; top: 12px; z-index: 99999;
+      padding: 8px 12px; border: 0; border-radius: 10px;
+      background: #10b981; color: #081c15; font-weight: 700; font-size: 13px;
+      box-shadow: 0 4px 14px rgba(0,0,0,.15);
+      cursor: pointer;
+    }
     /* Mobil hızlı test (isteğe bağlı) */
     #kr-debug {
       position: fixed; right: 12px; bottom: 12px; z-index: 99999;
@@ -29,13 +37,23 @@
       background: #0a84ff; color: #fff; font-size: 14px;
       display: none;
     }
+    /* Tam ekran ipucu */
+    #fs-hint {
+      position: fixed; inset: 0; display: none; place-items: center; z-index: 99998;
+      background: rgba(0,0,0,.55); color: #fff; font: 600 16px/1.6 system-ui, Arial;
+      text-align: center; padding: 24px;
+    }
   </style>
 </head>
 <body>
   <!-- Canlı $OKAPI rozeti -->
   <div id="score-display">$OKAPI: 0</div>
+  <!-- Büyük ekran butonu -->
+  <button id="kr-open-browser">BÜYÜK EKRAN</button>
   <!-- Hızlı test: ?debug=1 ile görünür -->
   <button id="kr-debug">Test Skor (123)</button>
+  <!-- Tam ekran ipucu -->
+  <div id="fs-hint">Tam ekran için ekrana dokun ya da bir kez tıkla</div>
 
   <!-- Oyun dosyaların -->
   <script src="scripts/supportcheck.js"></script>
@@ -56,6 +74,8 @@
 
     const scoreBox   = document.getElementById('score-display');
     const debugBtn   = document.getElementById('kr-debug');
+    const openBtn    = document.getElementById('kr-open-browser');
+    const fsHint     = document.getElementById('fs-hint');
 
     // --- Skor Gönderme (global) ---
     async function submitScore(finalScore, username){
@@ -82,8 +102,8 @@
         return true;
       }catch(e){ console.error('[KAPI] Score submit error:', e); return false; }
     }
-    window.submitScore = submitScore;        // eski ad
-    window.KAPI_sendScore = submitScore;     // alternatif ad
+    window.submitScore = submitScore;
+    window.KAPI_sendScore = submitScore;
 
     // --- Canlı yazı (global) ---
     let uiScore = 0;
@@ -94,19 +114,11 @@
     window.updateScore = updateScore;
 
     // --- Otomatik skor tespiti (global değişken adı bilinmiyorsa) ---
-    // 1) Kendin belirlemek istersen:
-    //    window.KAPI_SET_SCORE_KEY('Score');
     let SCORE_KEY = null;
     window.KAPI_SET_SCORE_KEY = function(k){ SCORE_KEY = k; console.log('[KAPI] SCORE_KEY set:', k); };
 
-    // Aday isimler (TR/EN ihtimalleri)
     const CANDIDATE_KEYS = ['Score','Skor','Puan','Points','Point','Coin','Coins','OKAPI','Okapi'];
-    let lastValues = {};     // {key: last}
-    let lastPeak   = 0;      // gönderilecek maksimum
-    let inRun      = false;
-    let submitted  = false;
-    let idleTicks  = 0;
-    let lastShown  = -1;
+    let lastValues = {}; let lastPeak = 0; let inRun = false; let submitted = false; let idleTicks = 0; let lastShown = -1;
 
     (function hookC3Runtime(){
       function attachHook(){
@@ -119,71 +131,60 @@
             try{
               window.__c3rt = rt;
 
-              // Her 300ms'de skor tespiti yap
               setInterval(()=>{
                 const gv = (rt && rt.globalVars) ? rt.globalVars : {};
-                // 1) Eğer kullanıcı SCORE_KEY belirlediyse onu oku
                 let num = NaN;
-                if (SCORE_KEY && gv && typeof gv[SCORE_KEY] !== 'undefined'){
+
+                if (SCORE_KEY && typeof gv[SCORE_KEY] !== 'undefined'){
                   num = Number(gv[SCORE_KEY]);
                 } else {
-                  // 2) Önce hazır aday isimlere bak
+                  // Aday isimler
                   for (const k of CANDIDATE_KEYS){
                     if (typeof gv[k] !== 'undefined'){
                       const v = Number(gv[k]);
                       if (!Number.isNaN(v)){ num = v; SCORE_KEY = k; break; }
                     }
                   }
-                  // 3) Hâlâ bulunamadıysa: TÜM global değişkenleri tarayıp artan sayısalı seç
+                  // Heuristik: artan sayısal değişkeni bul
                   if (Number.isNaN(num)){
-                    let bestKey = null, bestDelta = 0;
+                    let bestKey=null,bestDelta=0;
                     for (const [k,vRaw] of Object.entries(gv)){
-                      const v = Number(vRaw);
-                      if (Number.isNaN(v)) continue;
+                      const v = Number(vRaw); if (Number.isNaN(v)) continue;
                       const prev = lastValues[k];
-                      const delta = (typeof prev === 'number') ? (v - prev) : 0;
-                      if (delta > bestDelta && delta < 1e6) { bestDelta = delta; bestKey = k; num = v; }
+                      const d = (typeof prev==='number') ? (v - prev) : 0;
+                      if (d > bestDelta && d < 1e6){ bestDelta=d; bestKey=k; num=v; }
                     }
-                    if (bestKey){ SCORE_KEY = bestKey; }
+                    if (bestKey) SCORE_KEY=bestKey;
                   }
                 }
 
-                // Son değerleri sakla
                 for (const [k,v] of Object.entries(gv)){
-                  const n = Number(v); if (!Number.isNaN(n)) lastValues[k] = n;
+                  const n = Number(v); if (!Number.isNaN(n)) lastValues[k]=n;
                 }
 
-                // UI güncelle
                 if (!Number.isNaN(num) && num !== lastShown){
-                  lastShown = num;
-                  updateScore(num);
+                  lastShown = num; updateScore(num);
                 }
 
-                // Koşu/peak tespiti
-                if (!Number.isNaN(num) && num > 0){
-                  inRun = true;
-                  lastPeak = Math.max(lastPeak, num);
-                }
+                if (!Number.isNaN(num) && num > 0){ inRun = true; lastPeak = Math.max(lastPeak, num); }
 
-                // Olası GameOver bayrakları
-                let go = false;
+                // GameOver tahmini
+                let go=false;
                 try{
-                  if (rt && rt.globalVars){
-                    const g = rt.globalVars;
-                    go = (g.GameOver===1 || g.GameOver===true || g.IsGameOver===1 || g.Game_Over===1 || g.dead===1 || g.Dead===1);
-                  }
+                  const g = rt.globalVars;
+                  go = !!(g && (g.GameOver===1 || g.GameOver===true || g.IsGameOver===1 || g.Game_Over===1 || g.dead===1 || g.Dead===1));
                 }catch(_){}
 
-                // Skor sabit kaldıysa idle say
-                if (!Number.isNaN(num) && num === lastShown) idleTicks++; else idleTicks = 0;
+                // idle
+                if (!Number.isNaN(num) && num === lastShown) idleTicks++; else idleTicks=0;
 
-                // Gönderim şartları
-                if (go && inRun && !submitted) { submitted = true; submitScore(lastPeak); }
-                if (idleTicks >= 10 && inRun && !submitted) { submitted = true; submitScore(lastPeak); } // ~3sn
+                // Gönder
+                if (go && inRun && !submitted){ submitted=true; submitScore(lastPeak); }
+                if (idleTicks>=10 && inRun && !submitted){ submitted=true; submitScore(lastPeak); } // ~3sn
 
                 // Yeni koşu reset
-                if (submitted && (!Number.isFinite(num) || num===0)) {
-                  lastValues = {}; lastPeak = 0; inRun = false; submitted = false; idleTicks = 0; lastShown = -1;
+                if (submitted && (Number.isNaN(num) || num===0)){
+                  lastValues={}; lastPeak=0; inRun=false; submitted=false; idleTicks=0; lastShown=-1;
                 }
               }, 300);
             }catch(e){ console.warn('[KAPI] hook error', e); }
@@ -193,7 +194,6 @@
           return true;
         }catch(e){ return false; }
       }
-
       if (!attachHook()){
         let tries=0; const iv=setInterval(()=>{ tries++; if (attachHook()||tries>50) clearInterval(iv); }, 100);
       }
@@ -211,6 +211,42 @@
         debugBtn.onclick = async()=>{ const ok=await submitScore(123); alert(ok?'Skor gönderildi ✅':'Gönderilemedi ❌'); };
       }
     })();
+
+    // --- BÜYÜK EKRAN: aynı hash ile yeni sekme + fullscreen ---
+    function buildFsUrl(){
+      const base = location.origin + location.pathname;
+      const qs = new URLSearchParams(location.search);
+      qs.set('fs','1'); // fullscreen işareti
+      return base + '?' + qs.toString() + location.hash; // HASH AYNI KALIR → skor çalışır
+    }
+
+    function openBigScreen(){
+      const url = buildFsUrl();
+      const win = window.open(url, '_blank', 'noopener');
+      if (!win) alert('Yeni sekme engellendi. Lütfen butona tekrar tıklayın veya pop-up izni verin.');
+    }
+
+    openBtn.addEventListener('click', openBigScreen);
+
+    // Yeni sekmede otomatik fullscreen (ilk etkileşimde garanti)
+    const wantFs = new URLSearchParams(location.search).get('fs') === '1';
+    async function tryFullscreen(){
+      const el = document.documentElement;
+      if (el.requestFullscreen){
+        try { await el.requestFullscreen(); fsHint.style.display='none'; }
+        catch(e){ /* jest gerekebilir */ }
+      }
+    }
+
+    if (wantFs){
+      // Hemen dener (genelde engellenir), sonra ilk dokunuşta garanti altına alır
+      tryFullscreen();
+      fsHint.style.display='grid';
+      window.addEventListener('pointerdown', async ()=>{ await tryFullscreen(); }, { once:true });
+      document.addEventListener('fullscreenchange', ()=>{
+        if (document.fullscreenElement) fsHint.style.display='none';
+      });
+    }
 
     // (Opsiyonel) Telegram WebApp görünümü
     if (window.Telegram && Telegram.WebApp) {
