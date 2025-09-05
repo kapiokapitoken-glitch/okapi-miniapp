@@ -1,6 +1,6 @@
-﻿fastapi==0.112.0
+fastapi==0.112.0
 uvicorn[standard]==0.30.0
 python-telegram-bot==21.4
 itsdangerous==2.2.0
 SQLAlchemy==2.0.21
-asyncpg==0.29.0
+asyncpg==0.29.0 --only-binary :all:
