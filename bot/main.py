@@ -122,3 +122,18 @@ def health_root():
 @app.get("/api/health")
 def health_api():
     return PlainTextResponse("OK from /api/health")
+from typing import List
+
+@app.get("/api/highscores")
+async def highscores(chat_id: int, message_id: int):
+    """
+    Telegram'ın yerleşik leaderboard'unu döner (bu oyun mesajına/sohbete özel).
+    """
+    hs = await tg_app.bot.get_game_high_scores(chat_id=chat_id, message_id=message_id)
+    # hs: List[telegram.GameHighScore]
+    rows: List[dict] = []
+    for s in hs:
+        name = s.user.username or f"{s.user.first_name or ''} {s.user.last_name or ''}".strip() or f"id:{s.user.id}"
+        rows.append({"pos": s.position, "name": name, "score": s.score})
+    return {"ok": True, "items": rows}
+

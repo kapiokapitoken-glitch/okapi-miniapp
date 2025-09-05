@@ -97,3 +97,48 @@
   </script>
 </body>
 </html>
+<style>
+  #leaderboard{position:fixed; left:50%; top:10%; transform:translateX(-50%);
+    background:rgba(0,0,0,.75); color:#fff; padding:12px 16px; border-radius:12px;
+    font:14px/1.4 system-ui,Arial; max-width:90vw; z-index:99998; display:none}
+  #leaderboard h3{margin:0 0 8px; font-size:16px}
+  #leaderboard ol{margin:0; padding-left:18px}
+  #leaderboard .close{position:absolute; right:8px; top:6px; cursor:pointer}
+</style>
+
+<div id="leaderboard">
+  <span class="close" onclick="this.parentNode.style.display='none'">✕</span>
+  <h3>Leaderboard</h3>
+  <ol id="lb-list"></ol>
+</div>
+
+<script>
+  // ... (senin mevcut submitScore kodun burada zaten var)
+
+  // Global gösterim fonksiyonu
+  async function showLeaderboard(){
+    if (!chat_id || !message_id) { console.warn('LB: not in Telegram context'); return; }
+    try{
+      const res = await fetch(`/api/highscores?chat_id=${chat_id}&message_id=${message_id}`);
+      const j = await res.json();
+      if (!j.ok) throw new Error('highscores not ok');
+      const list = document.getElementById('lb-list');
+      list.innerHTML = '';
+      j.items.forEach(row => {
+        const li = document.createElement('li');
+        li.textContent = `${row.pos}. ${row.name} — ${row.score}`;
+        list.appendChild(li);
+      });
+      document.getElementById('leaderboard').style.display = 'block';
+    }catch(e){
+      console.error('LB error', e);
+    }
+  }
+  window.showLeaderboard = showLeaderboard;
+
+  // Hızlı test: L tuşu → leaderboard aç
+  document.addEventListener('keydown', e => {
+    if (e.key.toLowerCase() === 'l') showLeaderboard();
+  });
+</script>
+
