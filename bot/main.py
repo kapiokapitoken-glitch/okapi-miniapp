@@ -24,13 +24,20 @@ SECRET = os.environ.get("SECRET", "change-me")
 
 signer = TimestampSigner(SECRET)
 
-# DO PostgreSQL SSL ister → asyncpg için ssl context ile veriyoruz
-ssl_ctx = ssl.create_default_context()
+# --------------------
+# SSL (asyncpg) — Geçici çözüm: doğrulamayı kapat (şifreleme açık kalır)
+# Güvenli alternatif için CA'yı yükleyip verify_mode=CERT_REQUIRED yapacağız.
+# --------------------
+ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+ssl_ctx.check_hostname = False
+ssl_ctx.verify_mode = ssl.CERT_NONE
+
+# DB engine
 engine = create_async_engine(
     DATABASE_URL,
     pool_pre_ping=True,
     future=True,
-    connect_args={"ssl": ssl_ctx},   # kritik: sslmode yerine ssl context
+    connect_args={"ssl": ssl_ctx},   # sslmode yerine ssl context veriyoruz
 )
 
 # FastAPI
