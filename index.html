@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <title>KAPI RUN</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no">
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no">
 
   <link rel="manifest" href="appmanifest.json">
   <link rel="apple-touch-icon" sizes="128x128" href="icons/icon-128.png">
@@ -13,6 +14,18 @@
   <link rel="stylesheet" href="style.css">
 
   <style>
+    /* Tam ekran yerleşim – mobilde 100dvh kullan */
+    html, body { height:100%; margin:0; background:#000; overflow:hidden; }
+    #c3canvas, #c2canvas, canvas,
+    #c3canvasdiv, #c2canvasdiv, #construct-root {
+      position: fixed;
+      inset: 0;
+      width: 100vw !important;
+      height: 100dvh !important;
+      max-width: 100vw;
+      max-height: 100dvh;
+    }
+
     /* Canlı $OKAPI rozeti */
     #score-display {
       position: fixed; top: 12px; left: 12px;
@@ -27,15 +40,13 @@
       position: fixed; right: 12px; top: 12px; z-index: 99999;
       padding: 8px 12px; border: 0; border-radius: 10px;
       background: #10b981; color: #081c15; font-weight: 700; font-size: 13px;
-      box-shadow: 0 4px 14px rgba(0,0,0,.15);
-      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(0,0,0,.15); cursor: pointer;
     }
     /* Mobil hızlı test (isteğe bağlı) */
     #kr-debug {
       position: fixed; right: 12px; bottom: 12px; z-index: 99999;
       padding: 10px 14px; border: 0; border-radius: 10px;
-      background: #0a84ff; color: #fff; font-size: 14px;
-      display: none;
+      background: #0a84ff; color: #fff; font-size: 14px; display: none;
     }
     /* Tam ekran ipucu */
     #fs-hint {
@@ -219,14 +230,12 @@
       qs.set('fs','1'); // fullscreen işareti
       return base + '?' + qs.toString() + location.hash; // HASH AYNI KALIR → skor çalışır
     }
-
     function openBigScreen(){
       const url = buildFsUrl();
       const win = window.open(url, '_blank', 'noopener');
       if (!win) alert('Yeni sekme engellendi. Lütfen butona tekrar tıklayın veya pop-up izni verin.');
     }
-
-    openBtn.addEventListener('click', openBigScreen);
+    document.getElementById('kr-open-browser').addEventListener('click', openBigScreen);
 
     // Yeni sekmede otomatik fullscreen (ilk etkileşimde garanti)
     const wantFs = new URLSearchParams(location.search).get('fs') === '1';
@@ -237,11 +246,9 @@
         catch(e){ /* jest gerekebilir */ }
       }
     }
-
     if (wantFs){
-      // Hemen dener (genelde engellenir), sonra ilk dokunuşta garanti altına alır
-      tryFullscreen();
-      fsHint.style.display='grid';
+      tryFullscreen();                               // hemen dene
+      fsHint.style.display='grid';                    // kullanıcıya ipucu
       window.addEventListener('pointerdown', async ()=>{ await tryFullscreen(); }, { once:true });
       document.addEventListener('fullscreenchange', ()=>{
         if (document.fullscreenElement) fsHint.style.display='none';
