@@ -26,7 +26,7 @@
       z-index: 99999; backdrop-filter: blur(2px);
       user-select: none; -webkit-user-select: none;
     }
-    #kr-open-browser {
+    #kr-fullscreen {
       position: fixed; right: 12px; top: 12px; z-index: 99999;
       padding: 8px 12px; border: 0; border-radius: 10px;
       background: #10b981; color: #081c15; font-weight: 700; font-size: 13px;
@@ -43,43 +43,20 @@
       text-align: center; padding: 24px;
     }
   </style>
-</head>
-<body>
-  <!-- $OKAPI rozeti -->
-  <div id="score-display">$OKAPI: 0</div>
-  <!-- Büyük ekran -->
-  <button id="kr-open-browser">BÜYÜK EKRAN</button>
-  <!-- Hızlı test: ?debug=1 ile -->
-  <button id="kr-debug">Test Skor (123)</button>
-  <!-- Tam ekran ipucu -->
-  <div id="fs-hint">Tam ekran için ekrana dokun ya da bir kez tıkla</div>
 
-  <!-- Oyun dosyaların -->
-  <script src="scripts/supportcheck.js"></script>
-  <script src="scripts/offlineclient.js" type="module"></script>
-  <script src="scripts/main.js" type="module"></script>
-  <script src="scripts/register-sw.js" type="module"></script>
-
-  <!-- Telegram Games SDK -->
-  <script src="https://telegram.org/js/games.js"></script>
-
+  <!-- 🔹 ÖNCE: Skor, hook ve param fonksiyonları (main.js’DEN ÖNCE) -->
   <script>
     // --- Telegram paramları (hash) ---
-    const params     = new URLSearchParams(location.hash.slice(1));
-    const user_id    = params.get('u');
-    const chat_id    = params.get('c');
-    const message_id = params.get('m');
-    const token      = params.get('t');
-
-    const scoreBox   = document.getElementById('score-display');
-    const debugBtn   = document.getElementById('kr-debug');
-    const openBtn    = document.getElementById('kr-open-browser');
-    const fsHint     = document.getElementById('fs-hint');
+    const __params   = new URLSearchParams(location.hash.slice(1));
+    const __user_id  = __params.get('u');
+    const __chat_id  = __params.get('c');
+    const __msg_id   = __params.get('m');
+    const __token    = __params.get('t');
 
     // --- Skor Gönderme (global) ---
     async function submitScore(finalScore, username){
       try{
-        if (!user_id || !chat_id || !message_id || !token) {
+        if (!__user_id || !__chat_id || !__msg_id || !__token) {
           console.warn("[KAPI] Not in Telegram context; skipping score submit.");
           return false;
         }
@@ -87,10 +64,10 @@
           method: 'POST',
           headers: {'Content-Type':'application/json'},
           body: JSON.stringify({
-            user_id: Number(user_id),
-            chat_id: Number(chat_id),
-            message_id: Number(message_id),
-            token,
+            user_id: Number(__user_id),
+            chat_id: Number(__chat_id),
+            message_id: Number(__msg_id),
+            token: __token,
             score: Number(finalScore)||0,
             username: username || null
           })
@@ -105,14 +82,16 @@
     window.KAPI_sendScore = submitScore;
 
     // --- $OKAPI rozeti (global) ---
-    let uiScore = 0;
+    let __uiScore = 0;
     function updateScore(newScore){
-      uiScore = Number(newScore)||0;
-      if (scoreBox) scoreBox.textContent = "$OKAPI: " + uiScore;
+      __uiScore = Number(newScore)||0;
+      const box = document.getElementById('score-display');
+      if (box) box.textContent = "$OKAPI: " + __uiScore;
     }
     window.updateScore = updateScore;
 
-    // --- Otomatik skor tespiti ---
+    // --- Otomatik skor tespiti (Construct runtime hook) ---
+    // Kullanıcı isterse elle ayarlasın:
     let SCORE_KEY = null;
     window.KAPI_SET_SCORE_KEY = k => { SCORE_KEY = k; console.log('[KAPI] SCORE_KEY set:', k); };
 
@@ -122,7 +101,9 @@
     (function hookC3Runtime(){
       function attachHook(){
         try{
-          if (!self.C3_CreateRuntime || self.C3_CreateRuntime.__wrapped) return false;
+          // C3_CreateRuntime tanımlanmadan önce gelirsek, bir “retry” döngüsü kur
+          if (!self.C3_CreateRuntime) return false;
+          if (self.C3_CreateRuntime.__wrapped) return true;
 
           const orig = self.C3_CreateRuntime;
           self.C3_CreateRuntime = function(cfg){
@@ -137,12 +118,14 @@
                 if (SCORE_KEY && typeof gv[SCORE_KEY] !== 'undefined'){
                   num = Number(gv[SCORE_KEY]);
                 } else {
+                  // Aday isimler
                   for (const k of CANDIDATE_KEYS){
                     if (typeof gv[k] !== 'undefined'){
                       const v = Number(gv[k]);
                       if (!Number.isNaN(v)){ num = v; SCORE_KEY = k; break; }
                     }
                   }
+                  // Heuristik: artan sayısal değişkeni bul
                   if (Number.isNaN(num)){
                     let bestKey=null,bestDelta=0;
                     for (const [k,vRaw] of Object.entries(gv)){
@@ -155,27 +138,34 @@
                   }
                 }
 
+                // Son değerleri sakla
                 for (const [k,v] of Object.entries(gv)){
                   const n = Number(v); if (!Number.isNaN(n)) lastValues[k]=n;
                 }
 
+                // UI
                 if (!Number.isNaN(num) && num !== lastShown){
                   lastShown = num; updateScore(num);
                 }
 
+                // Peak ve run durumu
                 if (!Number.isNaN(num) && num > 0){ inRun = true; lastPeak = Math.max(lastPeak, num); }
 
+                // GameOver tahmini
                 let go=false;
                 try{
                   const g = rt.globalVars;
                   go = !!(g && (g.GameOver===1 || g.GameOver===true || g.IsGameOver===1 || g.Game_Over===1 || g.dead===1 || g.Dead===1));
                 }catch(_){}
 
+                // idle
                 if (!Number.isNaN(num) && num === lastShown) idleTicks++; else idleTicks=0;
 
+                // Gönder
                 if (go && inRun && !submitted){ submitted=true; submitScore(lastPeak); }
                 if (idleTicks>=10 && inRun && !submitted){ submitted=true; submitScore(lastPeak); }
 
+                // Yeni koşu reset
                 if (submitted && (Number.isNaN(num) || num===0)){
                   lastValues={}; lastPeak=0; inRun=false; submitted=false; idleTicks=0; lastShown=-1;
                 }
@@ -191,13 +181,35 @@
         let tries=0; const iv=setInterval(()=>{ tries++; if (attachHook()||tries>50) clearInterval(iv); }, 100);
       }
     })();
+  </script>
+</head>
+<body>
+  <!-- $OKAPI rozeti -->
+  <div id="score-display">$OKAPI: 0</div>
+  <!-- FULLSCREEN butonu -->
+  <button id="kr-fullscreen">FULLSCREEN</button>
+  <!-- Hızlı test: ?debug=1 ile -->
+  <button id="kr-debug">Test Skor (123)</button>
+  <!-- Tam ekran ipucu -->
+  <div id="fs-hint">Tam ekran için ekrana dokun ya da bir kez tıkla</div>
 
-    // Masaüstü test: S → 123 skor gönder
-    document.addEventListener('keydown', e => { if (e.key.toLowerCase()==='s') submitScore(123); });
+  <!-- Oyun dosyaların (ARTIK hook’tan SONRA yükleniyor) -->
+  <script src="scripts/supportcheck.js"></script>
+  <script src="scripts/offlineclient.js" type="module"></script>
+  <script src="scripts/main.js" type="module"></script>
+  <script src="scripts/register-sw.js" type="module"></script>
+
+  <!-- Telegram Games SDK -->
+  <script src="https://telegram.org/js/games.js"></script>
+
+  <script>
+    const debugBtn = document.getElementById('kr-debug');
+    const fsHint   = document.getElementById('fs-hint');
+    const openBtn  = document.getElementById('kr-fullscreen');
 
     // Mobil: ?debug=1 ile test butonunu göster
     (function showDebugIfRequested(){
-      const inTelegram = !!(user_id && chat_id && message_id && token);
+      const inTelegram = !!(__user_id && __chat_id && __msg_id && __token);
       const debug = new URLSearchParams(location.search).get('debug') === '1';
       if (inTelegram && debug && debugBtn){
         debugBtn.style.display='block';
@@ -205,7 +217,7 @@
       }
     })();
 
-    // --- BÜYÜK EKRAN: mobil Telegram'da aynı sekme, diğerlerinde yeni sekme ---
+    // --- FULLSCREEN: mobil Telegram'da aynı sekme, diğerlerinde yeni sekme ---
     function buildFsUrl(){
       const base = location.origin + location.pathname;
       const qs = new URLSearchParams(location.search);
