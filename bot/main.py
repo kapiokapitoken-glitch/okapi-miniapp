@@ -3,92 +3,48 @@ import ssl
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, PlainTextResponse
 from itsdangerous import TimestampSigner, BadSignature
-
 from telegram import Update
-from telegram.ext import (
-    Application, ApplicationBuilder,
-    CommandHandler, CallbackQueryHandler, ContextTypes,
-)
+from telegram.ext import Application, ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy import Column, Integer, String, BigInteger, select, desc
 
-from sqlalchemy.ext.asyncio import create_async_engine
-from sqlalchemy import text
-
-# --------------------
-# ENV & globals
-# --------------------
+# --- Config ---
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-GAME_SHORT_NAME = os.environ["GAME_SHORT_NAME"]                    # BotFather kısa adıyla birebir
-PUBLIC_GAME_URL = os.environ["PUBLIC_GAME_URL"].rstrip("/") + "/"  # oyunun kök URL'i
-DATABASE_URL = os.environ["DATABASE_URL"]                          # postgresql+asyncpg://host:port/db (SONUNDA sslmode YOK)
+GAME_SHORT_NAME = os.environ["GAME_SHORT_NAME"]
+PUBLIC_GAME_URL = os.environ["PUBLIC_GAME_URL"].rstrip("/") + "/"
 SECRET = os.environ.get("SECRET", "change-me")
+DATABASE_URL = os.environ["DATABASE_URL"]
 
+# --- DB setup ---
+Base = declarative_base()
+
+class Score(Base):
+    __tablename__ = "scores"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(BigInteger, unique=True, index=True)
+    username = Column(String, nullable=True)
+    score = Column(Integer, default=0)
+
+ssl_context = ssl.create_default_context()
+ssl_context.check_hostname = False
+ssl_context.verify_mode = ssl.CERT_NONE
+engine = create_async_engine(DATABASE_URL, connect_args={"ssl": ssl_context})
+SessionLocal = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
+# --- FastAPI & Telegram ---
 signer = TimestampSigner(SECRET)
-
-# --------------------
-# SSL (asyncpg) — Hızlı çözüm: doğrulamayı kapat (şifreleme açık)
-# İleride CA ile verify'ı açabiliriz.
-# --------------------
-ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-ssl_ctx.check_hostname = False
-ssl_ctx.verify_mode = ssl.CERT_NONE
-
-# DB engine
-engine = create_async_engine(
-    DATABASE_URL,
-    pool_pre_ping=True,
-    future=True,
-    connect_args={"ssl": ssl_ctx},   # sslmode yerine ssl context
-)
-
-# FastAPI
 app = FastAPI()
 
-# Telegram Application (PTB v21)
 tg_app: Application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-
-# --------------------
-# Telegram handlers
-# --------------------
+# --- Handlers ---
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await context.bot.send_game(
-        chat_id=update.effective_chat.id,
-        game_short_name=GAME_SHORT_NAME
-    )
+    await context.bot.send_game(chat_id=update.effective_chat.id, game_short_name=GAME_SHORT_NAME)
 
-async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("pong 🏓")
-
-async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    sql = """
-    SELECT
-        COALESCE(NULLIF(username,''), '@' || COALESCE(NULLIF(telegram_username,''), 'anon')) AS name,
-        score
-    FROM scores
-    ORDER BY score DESC
-    LIMIT 10;
-    """
-    rows_text = []
-    async with engine.begin() as conn:
-        result = await conn.execute(text(sql))
-        rows = result.fetchall()
-        for i, r in enumerate(rows, start=1):
-            rows_text.append(f"{i}. {r[0]} — {int(r[1])} 🧧")
-
-    text_out = "🏆 *KAPI RUN – Top 10*\n\n" + ("\n".join(rows_text) if rows_text else "_Henüz kayıt yok_")
-    await update.message.reply_markdown(text_out)
-
-async def cmd_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    sql = "SELECT score FROM scores WHERE user_id = :uid;"
-    async with engine.begin() as conn:
-        result = await conn.execute(text(sql), {"uid": user.id})
-        row = result.first()
-    score = int(row[0]) if row else 0
-    await update.message.reply_text(f"👤 {user.full_name}\nToplam puanın: {score} 🧧")
+tg_app.add_handler(CommandHandler(["start", "play"], cmd_start))
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Oyun butonuna tıklandığında Telegram callback_query gönderir
     cq = update.callback_query
     if cq and cq.game_short_name == GAME_SHORT_NAME:
         user_id = cq.from_user.id
@@ -97,49 +53,41 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         payload = f"{user_id}:{chat_id}:{message_id}"
         token = signer.sign(payload).decode()
-
         url = f"{PUBLIC_GAME_URL}#u={user_id}&c={chat_id}&m={message_id}&t={token}"
         await cq.answer(url=url)
     else:
         await cq.answer(text="Unknown game.", show_alert=True)
 
-# Handler kayıtları
-tg_app.add_handler(CommandHandler(["start", "play"], cmd_start))
-tg_app.add_handler(CommandHandler("ping", cmd_ping))
-tg_app.add_handler(CommandHandler("top", cmd_top))
-tg_app.add_handler(CommandHandler("me", cmd_me))
 tg_app.add_handler(CallbackQueryHandler(on_callback))
 
+async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("pong ✅")
 
-# --------------------
-# Lifecycle (PTB v21 için şart)
-# --------------------
-@app.on_event("startup")
-async def on_startup():
-    await tg_app.initialize()
-    await tg_app.start()
+tg_app.add_handler(CommandHandler("ping", cmd_ping))
 
-    # scores tablosu yoksa oluştur
-    create_sql = """
-    CREATE TABLE IF NOT EXISTS scores (
-        user_id BIGINT PRIMARY KEY,
-        username TEXT,
-        telegram_username TEXT,
-        score INTEGER NOT NULL DEFAULT 0
-    );
-    """
-    async with engine.begin() as conn:
-        await conn.execute(text(create_sql))
+async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Liderlik tablosunu (200 kişi) Telegram'da gösterir"""
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(Score).order_by(desc(Score.score)).limit(200)
+        )
+        rows = result.scalars().all()
 
-@app.on_event("shutdown")
-async def on_shutdown():
-    await tg_app.stop()
-    await tg_app.shutdown()
+    if not rows:
+        await update.message.reply_text("Henüz kimse skor kaydetmedi.")
+        return
 
+    lines = []
+    for i, row in enumerate(rows, start=1):
+        name = row.username or str(row.user_id)
+        lines.append(f"{i}. {name} — {row.score}")
 
-# --------------------
-# Webhook
-# --------------------
+    text = "🏆 *Leaderboard (Top 200)* 🏆\n\n" + "\n".join(lines)
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+tg_app.add_handler(CommandHandler("top", cmd_top))
+
+# --- Webhook ---
 @app.post("/bot/webhook")
 async def tg_webhook(request: Request):
     data = await request.json()
@@ -147,29 +95,20 @@ async def tg_webhook(request: Request):
     await tg_app.process_update(update)
     return JSONResponse({"ok": True})
 
-@app.get("/bot/check")
-def bot_check():
-    return PlainTextResponse("ok")
-
-
-# --------------------
-# Score & Leaderboard API
-# --------------------
+# --- API: Score ---
 @app.post("/api/score")
 async def post_score(request: Request):
     body = await request.json()
     try:
         user_id = int(body["user_id"])
+        score = int(body["score"])
         chat_id = int(body["chat_id"])
         message_id = int(body["message_id"])
-        score_inc = int(body["score"])
         token = body["token"]
-        username = str(body.get("username") or "")
-        tg_uname = str(body.get("telegram_username") or "")
+        username = body.get("username")
     except Exception:
         raise HTTPException(status_code=400, detail="Bad payload")
 
-    # token doğrulama
     try:
         payload = signer.unsign(token, max_age=1800).decode()
     except BadSignature:
@@ -178,66 +117,38 @@ async def post_score(request: Request):
     if payload != f"{user_id}:{chat_id}:{message_id}":
         raise HTTPException(status_code=403, detail="Token mismatch")
 
-    upsert_sql = """
-    INSERT INTO scores (user_id, username, telegram_username, score)
-    VALUES (:uid, :uname, :tg, :inc)
-    ON CONFLICT (user_id)
-    DO UPDATE SET
-        username = COALESCE(NULLIF(:uname, ''), scores.username),
-        telegram_username = COALESCE(NULLIF(:tg, ''), scores.telegram_username),
-        score = scores.score + EXCLUDED.score
-    RETURNING score;
-    """
-    async with engine.begin() as conn:
-        result = await conn.execute(
-            text(upsert_sql),
-            {"uid": user_id, "uname": username, "tg": tg_uname, "inc": max(0, score_inc)}
-        )
-        row = result.first()
-        total_score = int(row[0]) if row else 0
+    async with SessionLocal() as session:
+        obj = await session.get(Score, {"user_id": user_id})
+        if not obj:
+            obj = Score(user_id=user_id, username=username, score=score)
+            session.add(obj)
+        else:
+            obj.username = username or obj.username
+            obj.score = obj.score + score if score > 0 else obj.score
+        await session.commit()
 
-    # Telegram Game skorunu toplam skorla güncelle
     await tg_app.bot.set_game_score(
-        user_id=user_id,
-        score=total_score,
-        chat_id=chat_id,
-        message_id=message_id,
-        force=False,
-        disable_edit_message=False
+        user_id=user_id, score=score,
+        chat_id=chat_id, message_id=message_id,
+        force=False, disable_edit_message=False
     )
+    return JSONResponse({"ok": True})
 
-    return JSONResponse({"ok": True, "total_score": total_score})
-
-
+# --- API: Leaderboard ---
 @app.get("/api/leaderboard")
-async def leaderboard(limit: int = 50, offset: int = 0):
-    # güvenlik: makul sınırlar
-    limit = max(1, min(limit, 200))
-    offset = max(0, offset)
+async def get_leaderboard(limit: int = 200):
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(Score).order_by(desc(Score.score)).limit(limit)
+        )
+        rows = result.scalars().all()
 
-    sql = """
-    SELECT
-        COALESCE(NULLIF(username,''), '@' || COALESCE(NULLIF(telegram_username,''), 'anon')) AS name,
-        score
-    FROM scores
-    ORDER BY score DESC
-    LIMIT :limit OFFSET :offset;
-    """
-    async with engine.begin() as conn:
-        result = await conn.execute(text(sql), {"limit": limit, "offset": offset})
-        rows = result.fetchall()
+    return [
+        {"user_id": r.user_id, "username": r.username, "score": r.score}
+        for r in rows
+    ]
 
-    return {
-        "leaders": [{"username": r[0], "score": int(r[1])} for r in rows],
-        "limit": limit,
-        "offset": offset,
-        "next_offset": offset + limit if rows else None
-    }
-
-
-# --------------------
-# Health
-# --------------------
+# --- Health ---
 @app.get("/health")
 def health_root():
     return PlainTextResponse("OK")
