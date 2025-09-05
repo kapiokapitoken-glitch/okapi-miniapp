@@ -70,6 +70,6 @@ async def post_score(request: Request):
     )
     return JSONResponse({"ok": True})
 
-@app.get("/health")
-def health():
-    return PlainTextResponse("OK")
+@app.get("/api/health")
+def health_api():
+    return PlainTextResponse("OK from /api/health")
