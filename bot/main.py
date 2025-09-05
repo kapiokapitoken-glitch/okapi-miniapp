@@ -17,16 +17,16 @@ from sqlalchemy import text
 # ENV & globals
 # --------------------
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-GAME_SHORT_NAME = os.environ["GAME_SHORT_NAME"]                  # BotFather kısa adıyla birebir
+GAME_SHORT_NAME = os.environ["GAME_SHORT_NAME"]                    # BotFather kısa adıyla birebir
 PUBLIC_GAME_URL = os.environ["PUBLIC_GAME_URL"].rstrip("/") + "/"  # oyunun kök URL'i
-DATABASE_URL = os.environ["DATABASE_URL"]                        # postgresql+asyncpg://...  (SONUNDA sslmode OLMAYACAK)
+DATABASE_URL = os.environ["DATABASE_URL"]                          # postgresql+asyncpg://host:port/db (SONUNDA sslmode YOK)
 SECRET = os.environ.get("SECRET", "change-me")
 
 signer = TimestampSigner(SECRET)
 
 # --------------------
-# SSL (asyncpg) — Geçici çözüm: doğrulamayı kapat (şifreleme açık kalır)
-# Güvenli alternatif için CA'yı yükleyip verify_mode=CERT_REQUIRED yapacağız.
+# SSL (asyncpg) — Hızlı çözüm: doğrulamayı kapat (şifreleme açık)
+# İleride CA ile verify'ı açabiliriz.
 # --------------------
 ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 ssl_ctx.check_hostname = False
@@ -37,7 +37,7 @@ engine = create_async_engine(
     DATABASE_URL,
     pool_pre_ping=True,
     future=True,
-    connect_args={"ssl": ssl_ctx},   # sslmode yerine ssl context veriyoruz
+    connect_args={"ssl": ssl_ctx},   # sslmode yerine ssl context
 )
 
 # FastAPI
@@ -59,7 +59,36 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("pong 🏓")
 
+async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    sql = """
+    SELECT
+        COALESCE(NULLIF(username,''), '@' || COALESCE(NULLIF(telegram_username,''), 'anon')) AS name,
+        score
+    FROM scores
+    ORDER BY score DESC
+    LIMIT 10;
+    """
+    rows_text = []
+    async with engine.begin() as conn:
+        result = await conn.execute(text(sql))
+        rows = result.fetchall()
+        for i, r in enumerate(rows, start=1):
+            rows_text.append(f"{i}. {r[0]} — {int(r[1])} 🧧")
+
+    text_out = "🏆 *KAPI RUN – Top 10*\n\n" + ("\n".join(rows_text) if rows_text else "_Henüz kayıt yok_")
+    await update.message.reply_markdown(text_out)
+
+async def cmd_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    sql = "SELECT score FROM scores WHERE user_id = :uid;"
+    async with engine.begin() as conn:
+        result = await conn.execute(text(sql), {"uid": user.id})
+        row = result.first()
+    score = int(row[0]) if row else 0
+    await update.message.reply_text(f"👤 {user.full_name}\nToplam puanın: {score} 🧧")
+
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Oyun butonuna tıklandığında Telegram callback_query gönderir
     cq = update.callback_query
     if cq and cq.game_short_name == GAME_SHORT_NAME:
         user_id = cq.from_user.id
@@ -74,8 +103,11 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await cq.answer(text="Unknown game.", show_alert=True)
 
+# Handler kayıtları
 tg_app.add_handler(CommandHandler(["start", "play"], cmd_start))
 tg_app.add_handler(CommandHandler("ping", cmd_ping))
+tg_app.add_handler(CommandHandler("top", cmd_top))
+tg_app.add_handler(CommandHandler("me", cmd_me))
 tg_app.add_handler(CallbackQueryHandler(on_callback))
 
 
@@ -178,20 +210,29 @@ async def post_score(request: Request):
 
 
 @app.get("/api/leaderboard")
-async def leaderboard():
+async def leaderboard(limit: int = 50, offset: int = 0):
+    # güvenlik: makul sınırlar
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+
     sql = """
     SELECT
         COALESCE(NULLIF(username,''), '@' || COALESCE(NULLIF(telegram_username,''), 'anon')) AS name,
         score
     FROM scores
     ORDER BY score DESC
-    LIMIT 10;
+    LIMIT :limit OFFSET :offset;
     """
     async with engine.begin() as conn:
-        result = await conn.execute(text(sql))
+        result = await conn.execute(text(sql), {"limit": limit, "offset": offset})
         rows = result.fetchall()
 
-    return {"leaders": [{"username": r[0], "score": int(r[1])} for r in rows]}
+    return {
+        "leaders": [{"username": r[0], "score": int(r[1])} for r in rows],
+        "limit": limit,
+        "offset": offset,
+        "next_offset": offset + limit if rows else None
+    }
 
 
 # --------------------
