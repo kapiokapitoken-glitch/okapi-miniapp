@@ -1,10 +1,9 @@
 <!DOCTYPE html>
-<html>
+<html lang="tr">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
   <title>KAPI RUN</title>
-  <meta name="viewport"
-        content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no" />
 
   <link rel="manifest" href="appmanifest.json">
   <link rel="apple-touch-icon" sizes="128x128" href="icons/icon-128.png">
@@ -15,355 +14,208 @@
 
   <style>
     html, body { height:100%; margin:0; background:#000; overflow:hidden; }
-
-    /* $OKAPI badge */
-    #score-display {
-      position: fixed; top: 12px; left: 12px;
-      background: rgba(0,0,0,.6); color: #fff;
-      padding: 6px 12px; border-radius: 8px;
-      font: 700 14px/1.4 system-ui, Arial;
-      z-index: 99999; backdrop-filter: blur(2px);
-      user-select: none; -webkit-user-select: none;
+    #score-display{
+      position:fixed; top:12px; left:12px; z-index:99999;
+      padding:6px 12px; border-radius:8px; color:#fff; background:rgba(0,0,0,.6);
+      font:700 14px/1.4 system-ui, Arial; user-select:none; -webkit-user-select:none; backdrop-filter:blur(2px);
     }
-
-    /* FULLSCREEN button (masaüstü için) */
-    #kr-fullscreen {
-      position: fixed; right: 12px; top: 12px; z-index: 99999;
-      padding: 8px 12px; border: 0; border-radius: 10px;
-      background: #10b981; color: #081c15; font-weight: 700; font-size: 13px;
-      box-shadow: 0 4px 14px rgba(0,0,0,.15); cursor: pointer;
+    #kr-fullscreen{
+      position:fixed; right:12px; top:12px; z-index:99999;
+      padding:8px 12px; border:0; border-radius:10px; cursor:pointer;
+      background:#10b981; color:#081c15; font:700 13px system-ui,Arial; box-shadow:0 4px 14px rgba(0,0,0,.15);
     }
-
-    /* Debug test button (optional) */
-    #kr-debug {
-      position: fixed; right: 12px; bottom: 12px; z-index: 99999;
-      padding: 10px 14px; border: 0; border-radius: 10px;
-      background: #0a84ff; color: #fff; font-size: 14px; display: none;
+    #fs-hint{
+      position:fixed; inset:0; display:none; place-items:center; z-index:99998;
+      background:rgba(0,0,0,.55); color:#fff; font:600 16px/1.6 system-ui,Arial; text-align:center; padding:24px;
     }
-
-    /* Desktop fs ipucu (fs=1’le açılan sayfada) */
-    #fs-hint {
-      position: fixed; inset: 0; display: none; place-items: center; z-index: 99998;
-      background: rgba(0,0,0,.55); color: #fff; font: 600 16px/1.6 system-ui, Arial;
-      text-align: center; padding: 24px;
-    }
-
-    /* 🛠 Score Inspector overlay */
-    #kr-inspector {
-      position: fixed; right: 12px; bottom: 70px; z-index: 99999;
-      width: min(92vw, 420px); max-height: 60vh; overflow: auto;
-      background: rgba(0,0,0,.85); color:#fff; border-radius: 12px; padding: 10px;
-      display: none;
-    }
-    #kr-inspector h3 { margin: 0 0 8px 0; font:700 14px system-ui,Arial; }
-    #kr-inspector .item {
-      display:flex; justify-content:space-between; align-items:center;
-      padding:8px; border-radius:8px; margin-bottom:6px; background:rgba(255,255,255,.06);
-      cursor:pointer;
-    }
-    #kr-inspector .item.active { outline:2px solid #10b981; }
-    #kr-inspector small { opacity:.75; }
+    /* Inspector */
+    #kr-inspector{ position:fixed; right:12px; bottom:70px; z-index:99999; display:none;
+      width:min(92vw,420px); max-height:60vh; overflow:auto; background:rgba(0,0,0,.85); color:#fff;
+      border-radius:12px; padding:10px; }
+    #kr-inspector h3{ margin:0 0 8px 0; font:700 14px system-ui,Arial; }
+    #kr-inspector .item{ display:flex; justify-content:space-between; align-items:center;
+      padding:8px; margin-bottom:6px; border-radius:8px; background:rgba(255,255,255,.06); cursor:pointer; }
+    #kr-inspector .item.active{ outline:2px solid #10b981; }
   </style>
 
-  <!-- 🔹 HOOK & SCORE (main.js’DEN ÖNCE) -->
+  <!-- 🔹 HOOK & SCORE (oyun scriptlerinden ÖNCE yüklenir) -->
   <script>
-    // --- TG hash params ---
-    const __params   = new URLSearchParams(location.hash.slice(1));
-    const __user_id  = __params.get('u');
-    const __chat_id  = __params.get('c');
-    const __msg_id   = __params.get('m');
-    const __token    = __params.get('t');
+    const VER = '20250906'; // cache-bust etiketi
 
-    // Badge update
-    let __uiScore = 0;
-    function updateScore(newScore){
-      __uiScore = Number(newScore)||0;
+    // Telegram hash paramları
+    const _p = new URLSearchParams(location.hash.slice(1));
+    const _uid = _p.get('u'), _cid=_p.get('c'), _mid=_p.get('m'), _tok=_p.get('t');
+
+    // Rozet
+    function updateScore(n){
       const box = document.getElementById('score-display');
-      if (box) box.textContent = "$OKAPI: " + __uiScore;
+      box && (box.textContent = "$OKAPI: " + (Number(n)||0));
     }
     window.updateScore = updateScore;
 
-    // Manual report API (Construct’tan çağrılabilir)
-    window.KAPI_reportScore = function(s){
-      const n = Number(s)||0;
-      __internal.updateFromValue(n, "manual");
-    };
-
-    // Score POST
-    async function submitScore(finalScore, username){
+    // Skor gönder
+    async function submitScore(score, username){
       try{
-        if (!__user_id || !__chat_id || !__msg_id || !__token) {
-          console.warn("[KAPI] Not in Telegram context; skipping score submit.");
-          return false;
-        }
+        if(!_uid||!_cid||!_mid||!_tok){ console.warn('[KAPI] Not in Telegram context'); return false; }
         const res = await fetch('/api/score', {
-          method: 'POST',
-          headers: {'Content-Type':'application/json'},
+          method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify({
-            user_id: Number(__user_id),
-            chat_id: Number(__chat_id),
-            message_id: Number(__msg_id),
-            token: __token,
-            score: Number(finalScore)||0,
-            username: username || null
+            user_id:Number(_uid), chat_id:Number(_cid), message_id:Number(_mid),
+            token:_tok, score:Number(score)||0, username:username||null
           })
         });
         const j = await res.json().catch(()=>({}));
-        if (!res.ok || !j.ok){ console.error('[KAPI] Score submit failed:', j); return false; }
-        console.log('[KAPI] Score submitted:', finalScore);
-        return true;
-      }catch(e){ console.error('[KAPI] Score submit error:', e); return false; }
+        if(!res.ok || !j.ok){ console.error('[KAPI] score fail', j); return false; }
+        console.log('[KAPI] score ok', score); return true;
+      }catch(e){ console.error('[KAPI] score err', e); return false; }
     }
     window.submitScore = submitScore;
-    window.KAPI_sendScore = submitScore;
+    window.KAPI_reportScore = n => updateScore(n); // Construct'tan çağrılabilir
 
-    // ---- Runtime + detection shared state ----
-    let SCORE_KEY = null;
-    window.KAPI_SET_SCORE_KEY = k => { SCORE_KEY = k; console.log('[KAPI] SCORE_KEY set:', k); };
-    const CANDIDATE_KEYS = ['Score','Skor','Puan','Points','Point','Coin','Coins','OKAPI','Okapi'];
-
-    const __internal = {
-      rt: null,
-      lastValues: {},
-      lastShown: -1,
-      lastPeak:  0,
-      inRun:     false,
-      submitted: false,
-      idleTicks: 0,
-
-      updateFromValue(v){
-        const num = Number(v); if (Number.isNaN(num)) return;
-        if (num !== this.lastShown){ this.lastShown = num; updateScore(num); this.idleTicks=0; }
-        else { this.idleTicks++; }
-        if (num > 0){ this.inRun = true; this.lastPeak = Math.max(this.lastPeak, num); }
-        if (this.idleTicks >= 10 && this.inRun && !this.submitted){ this.submitted = true; submitScore(this.lastPeak); }
-        if (this.submitted && num===0){ this.reset(); }
-      },
-      reset(){
-        this.lastValues={}; this.lastShown=-1; this.lastPeak=0; this.inRun=false; this.submitted=false; this.idleTicks=0;
-      }
-    };
+    // ---- Runtime hook + değişken tespiti ----
+    let SCORE_KEY=null; const CANDS=['NEWSCORE','Score','SCORE','Skor','Puan','BESTSCORE','OKAPI','Coins'];
+    const _state={rt:null,lastVals:{},lastShow:-1,peak:0,inRun:false,submitted:false,idle:0};
 
     function initRuntime(rt){
-      if (!rt || __internal.rt) return;
-      __internal.rt = rt;
-      window.__c3rt = rt;
-
-      // Inspector UI
-      buildInspectorUI();
+      if(!rt || _state.rt) return;
+      _state.rt = rt; window.__c3rt = rt;
+      buildInspector();
 
       setInterval(()=>{
         const gv = (rt && rt.globalVars) ? rt.globalVars : {};
-        let num = NaN;
+        let val = NaN;
 
-        if (SCORE_KEY && typeof gv[SCORE_KEY] !== 'undefined'){
-          num = Number(gv[SCORE_KEY]);
-        } else {
-          for (const k of CANDIDATE_KEYS){
-            if (typeof gv[k] !== 'undefined'){
-              const v = Number(gv[k]);
-              if (!Number.isNaN(v)){ num = v; SCORE_KEY = k; break; }
+        if(SCORE_KEY && typeof gv[SCORE_KEY] !== 'undefined'){
+          val = Number(gv[SCORE_KEY]);
+        }else{
+          for(const k of CANDS){ if(typeof gv[k] !== 'undefined'){ const v=Number(gv[k]); if(!Number.isNaN(v)){ val=v; SCORE_KEY=k; break; }}}
+          if(Number.isNaN(val)){
+            let bestK=null, bestΔ=0;
+            for(const [k,v] of Object.entries(gv)){
+              const n=Number(v); if(Number.isNaN(n)) continue;
+              const prev=_state.lastVals[k]; const d=(typeof prev==='number')?(n-prev):0;
+              if(d>bestΔ && d<1e6){ bestΔ=d; bestK=k; val=n; }
             }
-          }
-          if (Number.isNaN(num)){
-            let bestKey=null,bestDelta=0;
-            for (const [k,vRaw] of Object.entries(gv)){
-              const v = Number(vRaw); if (Number.isNaN(v)) continue;
-              const prev = __internal.lastValues[k];
-              const d = (typeof prev==='number') ? (v - prev) : 0;
-              if (d > bestDelta && d < 1e6){ bestDelta=d; bestKey=k; num=v; }
-            }
-            if (bestKey) SCORE_KEY=bestKey;
+            if(bestK) SCORE_KEY=bestK;
           }
         }
 
-        for (const [k,v] of Object.entries(gv)){
-          const n = Number(v); if (!Number.isNaN(n)) __internal.lastValues[k]=n;
+        for(const [k,v] of Object.entries(gv)){ const n=Number(v); if(!Number.isNaN(n)) _state.lastVals[k]=n; }
+
+        if(!Number.isNaN(val)){
+          if(val!==_state.lastShow){ _state.lastShow=val; updateScore(val); _state.idle=0; } else { _state.idle++; }
+          if(val>0){ _state.inRun=true; _state.peak=Math.max(_state.peak,val); }
+          if(_state.idle>=10 && _state.inRun && !_state.submitted){ _state.submitted=true; submitScore(_state.peak); }
+          if(_state.submitted && val===0){ _state.inRun=false; _state.submitted=false; _state.peak=0; _state.idle=0; }
         }
-
-        if (!Number.isNaN(num)) __internal.updateFromValue(num);
-
-        // GameOver tahmini
-        let go=false;
-        try{
-          const g = rt.globalVars;
-          go = !!(g && (g.GameOver===1 || g.GameOver===true || g.IsGameOver===1 || g.Game_Over===1 || g.dead===1 || g.Dead===1));
-        }catch(_){}
-
-        if (go && __internal.inRun && !__internal.submitted){ __internal.submitted=true; submitScore(__internal.lastPeak); }
       }, 300);
     }
 
-    // Hook strategy 1: wrap C3_CreateRuntime
-    (function hookCreateRuntime(){
-      const tryWrap = ()=>{
-        if (!self.C3_CreateRuntime) return false;
-        if (self.C3_CreateRuntime.__wrapped) return true;
-        const orig = self.C3_CreateRuntime;
-        self.C3_CreateRuntime = function(cfg){
-          const rt = orig(cfg);
-          try { initRuntime(rt); } catch(e){ console.warn('[KAPI] initRuntime wrap error', e); }
-          return rt;
-        };
-        self.C3_CreateRuntime.__wrapped = true;
-        return true;
+    // Hook C3_CreateRuntime
+    (function(){
+      const wrap=()=>{
+        if(!self.C3_CreateRuntime) return false;
+        if(self.C3_CreateRuntime.__wrapped) return true;
+        const orig=self.C3_CreateRuntime;
+        self.C3_CreateRuntime=function(cfg){ const rt=orig(cfg); try{initRuntime(rt);}catch(e){} return rt; };
+        self.C3_CreateRuntime.__wrapped=true; return true;
       };
-      if (!tryWrap()){
-        let tries=0; const iv=setInterval(()=>{ tries++; if (tryWrap()||tries>50) clearInterval(iv); }, 100);
+      if(!wrap()){
+        let tries=0; const iv=setInterval(()=>{ tries++; if(wrap()||tries>50) clearInterval(iv); },100);
       }
     })();
-
-    // Hook strategy 2: cr_getC3Runtime fallback
-    (function hookCrGetter(){
-      let tries=0;
-      const iv=setInterval(()=>{
-        tries++;
-        try{
-          const rt = (typeof window.cr_getC3Runtime === 'function') ? window.cr_getC3Runtime() : null;
-          if (rt){ initRuntime(rt); clearInterval(iv); }
-          if (tries>80) clearInterval(iv);
-        }catch(_){}
-      }, 125);
+    // Fallback
+    (function(){
+      let tries=0; const iv=setInterval(()=>{ tries++; try{ const rt=window.cr_getC3Runtime?.(); if(rt){initRuntime(rt); clearInterval(iv);} if(tries>80) clearInterval(iv);}catch(_){}} ,125);
     })();
 
     // Inspector UI
-    function buildInspectorUI(){
-      if (document.getElementById('kr-inspector')) return;
-      const box = document.createElement('div');
-      box.id = 'kr-inspector';
-      box.innerHTML = `
-        <h3>🛠 Select your score variable</h3>
-        <div id="kr-inspector-list"></div>
-        <small>İpucu: $OKAPI rozeti artmıyorsa listeden doğru değişkeni seç.</small>
-      `;
+    function buildInspector(){
+      if(document.getElementById('kr-inspector')) return;
+      const box=document.createElement('div'); box.id='kr-inspector';
+      box.innerHTML=`<h3>🛠 Skor değişkenini seç</h3><div id="kr-inspector-list"></div><small>İpucu: Rozet artmıyorsa listeden doğru değişkeni seç.</small>`;
       document.body.appendChild(box);
 
-      const badge = document.getElementById('score-display');
-      if (badge){
-        let lastTap=0, pressT=null;
+      const badge=document.getElementById('score-display');
+      if(badge){
+        let lastTap=0, t=null;
         badge.addEventListener('pointerdown', ()=>{
-          const now=Date.now();
-          if (now-lastTap<350){ toggleInspector(); }
-          lastTap=now;
-          pressT=setTimeout(toggleInspector, 600);
+          const now=Date.now(); if(now-lastTap<350){toggleInspector();} lastTap=now; t=setTimeout(toggleInspector,600);
         });
-        badge.addEventListener('pointerup', ()=>{ clearTimeout(pressT); });
-        badge.addEventListener('pointerleave', ()=>{ clearTimeout(pressT); });
+        badge.addEventListener('pointerup', ()=>clearTimeout(t));
+        badge.addEventListener('pointerleave', ()=>clearTimeout(t));
       }
+      setInterval(()=>{
+        const rt=_state.rt; if(!rt||!rt.globalVars) return;
+        const list=document.getElementById('kr-inspector-list'); if(!list) return;
+        const items=[];
+        for(const [k,v] of Object.entries(rt.globalVars)){ const n=Number(v); if(!Number.isNaN(n)) items.push({k,v:n}); }
+        items.sort((a,b)=>b.v-a.v);
+        list.innerHTML = items.slice(0,50).map(({k,v})=>{
+          const act=(k===SCORE_KEY)?'active':'';
+          return `<div class="item ${act}" data-k="${k}"><strong>${k}</strong><span>${v}</span></div>`;
+        }).join('') || '<small>Sayı değerli global değişken bulunamadı.</small>';
+        for(const el of list.querySelectorAll('.item')) el.onclick=()=>{ SCORE_KEY=el.getAttribute('data-k'); toggleInspector(); };
+      }, 500);
     }
     function toggleInspector(){
-      const el = document.getElementById('kr-inspector');
-      if (!el) return;
-      el.style.display = (el.style.display==='none'||!el.style.display)?'block':'none';
-    }
-    function refreshInspector(gv){
-      const list = document.getElementById('kr-inspector-list');
-      if (!list) return;
-      const items = [];
-      for (const [k,v] of Object.entries(gv)){
-        const n = Number(v);
-        if (!Number.isNaN(n)) items.push({k,v:n});
-      }
-      items.sort((a,b)=>b.v-a.v);
-      list.innerHTML = items.slice(0,50).map(({k,v})=>{
-        const act = (k===SCORE_KEY)?'active':'';
-        return `<div class="item ${act}" data-k="${k}"><strong>${k}</strong><span>${v}</span></div>`;
-      }).join('') || '<small>No numeric global variables found.</small>';
-
-      for (const div of list.querySelectorAll('.item')){
-        div.onclick = ()=>{ SCORE_KEY = div.getAttribute('data-k'); toggleInspector(); };
-      }
+      const el=document.getElementById('kr-inspector');
+      if(!el) return; el.style.display = (el.style.display==='none'||!el.style.display)?'block':'none';
     }
 
-    // Helpers
-    function isMobile(){ return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent); }
-
-    // Fullscreen (desktop)
+    // Yardımcılar
+    const isMobile = ()=>/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
     async function tryFullscreen(){
-      const el = document.documentElement;
-      const req = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
-      if (req) {
-        try { await req.call(el); document.getElementById('fs-hint').style.display='none'; }
-        catch(e){ /* first user gesture may be required */ }
-      }
+      const el=document.documentElement; const req=el.requestFullscreen||el.webkitRequestFullscreen||el.msRequestFullscreen;
+      if(req){ try{ await req.call(el); document.getElementById('fs-hint').style.display='none'; }catch(_){ } }
     }
   </script>
 </head>
+
 <body>
   <div id="score-display">$OKAPI: 0</div>
-  <button id="kr-fullscreen">FULLSCREEN</button>
-  <button id="kr-debug">Test Skor (123)</button>
-
-  <!-- Desktop fs ipucu -->
-  <div id="fs-hint">Tap/click once to enter fullscreen</div>
-
-  <!-- 🛠 Inspector -->
+  <button id="kr-fullscreen">TAM EKRAN</button>
+  <div id="fs-hint">Tam ekran için bir kez dokun / tıkla</div>
   <div id="kr-inspector"></div>
 
-  <!-- Game files -->
-  <script src="scripts/supportcheck.js"></script>
-  <script src="scripts/offlineclient.js" type="module"></script>
-  <script src="scripts/main.js" type="module"></script>
-  <script src="scripts/register-sw.js" type="module"></script>
+  <!-- Construct uyumluluk kontrolleri (iOS için gerekli) -->
+  <script src="scripts/modernjscheck.js?v=20250906"></script>
+  <script src="scripts/supportcheck.js?v=20250906"></script>
+
+  <!-- Construct 3 bootstrap (yeni export c3main) -->
+  <script src="scripts/c3main.js?v=20250906"></script>
+
+  <!-- PWA / Service Worker (opsiyonel) -->
+  <script type="module" src="scripts/offlineclient.js?v=20250906"></script>
+  <script type="module" src="scripts/register-sw.js?v=20250906"></script>
 
   <!-- Telegram Games SDK -->
   <script src="https://telegram.org/js/games.js"></script>
 
   <script>
-    const debugBtn = document.getElementById('kr-debug');
-    const fsHint   = document.getElementById('fs-hint');
-    const fsBtn    = document.getElementById('kr-fullscreen');
+    // Mobilde fullscreen butonu gizle, masaüstünde yeni sekmede fs=1 ile aç
+    (function(){
+      const fsBtn = document.getElementById('kr-fullscreen');
+      const fsHint= document.getElementById('fs-hint');
 
-    // Debug görünümü
-    (function showDebugIfRequested(){
-      const inTelegram = !!(__user_id && __chat_id && __msg_id && __token);
-      const debug = new URLSearchParams(location.search).get('debug') === '1';
-      if (inTelegram && debug && debugBtn){
-        debugBtn.style.display='block';
-        debugBtn.onclick = async()=>{ const ok=await submitScore(123); alert(ok?'Skor gönderildi ✅':'Gönderilemedi ❌'); };
-      }
-    })();
-
-    // 🔕 Mobilde FULLSCREEN butonunu gizle (fullscreen devre dışı)
-    if (isMobile()){
-      fsBtn.style.display = 'none';
-    } else {
-      // Masaüstü: fs=1 ile açıldıysa ipucunu göster + ilk tıkta full screen
-      const wantFs = new URLSearchParams(location.search).get('fs') === '1';
-      if (wantFs){
-        fsHint.style.display='grid';
-        tryFullscreen();
-        window.addEventListener('pointerdown', async ()=>{ await tryFullscreen(); }, { once:true });
-        document.addEventListener('fullscreenchange', ()=>{
-          if (document.fullscreenElement) fsHint.style.display='none';
+      if(isMobile()){
+        fsBtn.style.display='none';
+      }else{
+        const wantFs = new URLSearchParams(location.search).get('fs') === '1';
+        if(wantFs){
+          fsHint.style.display='grid';
+          tryFullscreen();
+          window.addEventListener('pointerdown', ()=>tryFullscreen(), {once:true});
+          document.addEventListener('fullscreenchange', ()=>{ if(document.fullscreenElement) fsHint.style.display='none'; });
+        }
+        fsBtn.addEventListener('click', ()=>{
+          const base = location.origin + location.pathname;
+          const qs = new URLSearchParams(location.search); qs.set('fs','1');
+          const url = base + '?' + qs.toString() + location.hash; // hash korunur -> Telegram tokenları kalır
+          const w = window.open(url, '_blank', 'noopener'); if(!w) location.href = url;
         });
       }
-
-      // FULLSCREEN butonu: yeni sekmeye fs=1 ile aç
-      function buildFsUrl(){
-        const base = location.origin + location.pathname;
-        const qs = new URLSearchParams(location.search);
-        qs.set('fs','1');
-        return base + '?' + qs.toString() + location.hash; // hash korunur → skor çalışır
-      }
-      fsBtn.addEventListener('click', ()=>{
-        const url = buildFsUrl();
-        const win = window.open(url, '_blank', 'noopener');
-        if (!win) location.href = url;
-      });
-    }
-
-    // Telegram WebApp cosmetics
-    if (window.Telegram && Telegram.WebApp) {
-      try { Telegram.WebApp.expand(); Telegram.WebApp.ready(); } catch(_){}
-    }
-
-    // Inspector periyodik yenileme
-    setInterval(()=>{
-      if (window.__c3rt && window.__c3rt.globalVars){
-        refreshInspector(window.__c3rt.globalVars);
-      }
-    }, 500);
+    })();
   </script>
 </body>
 </html>
