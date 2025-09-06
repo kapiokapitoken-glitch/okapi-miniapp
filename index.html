@@ -9,7 +9,6 @@
   <link rel="apple-touch-icon" sizes="128x128" href="icons/icon-128.png">
   <link rel="apple-touch-icon" sizes="256x256" href="icons/icon-256.png">
   <link rel="icon" type="image/png" href="icons/icon-256.png">
-
   <link rel="stylesheet" href="style.css">
 
   <style>
@@ -149,7 +148,9 @@
         const rt=_state.rt; if(!rt||!rt.globalVars) return;
         const list=document.getElementById('kr-inspector-list'); if(!list) return;
         const items=[];
-        for(const [k,v] of Object.entries(rt.globalVars)){ const n=Number(v); if(!Number.isNaN(n)) items.push({k,v:n}); }
+        for(const [k,v] of Object.entries(rt.globalVars)){ const n=Number(v); if(Number.isNaN(n)) continue;
+          items.push({k,v:n});
+        }
         items.sort((a,b)=>b.v-a.v);
         list.innerHTML = items.slice(0,50).map(({k,v})=>{
           const act=(k===SCORE_KEY)?'active':'';
@@ -182,7 +183,8 @@
   <script src="scripts/modernjscheck.js?v=20250906"></script>
   <script src="scripts/supportcheck.js?v=20250906"></script>
 
-  <!-- Construct 3 bootstrap (yeni export c3main) -->
+  <!-- ⚠️ Sıra ÖNEMLİ: önce runtime, sonra main -->
+  <script src="scripts/c3runtime.js?v=20250906"></script>
   <script src="scripts/c3main.js?v=20250906"></script>
 
   <!-- PWA / Service Worker (opsiyonel) -->
