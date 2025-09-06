@@ -14,12 +14,15 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy import Column, Integer, String, BigInteger, select, desc
 
+# 🔹 Statik dosyaları sunmak için
+from fastapi.staticfiles import StaticFiles
+
 # --- Config ---
 BOT_TOKEN       = os.environ["BOT_TOKEN"]
-GAME_SHORT_NAME = os.environ["GAME_SHORT_NAME"]                 # örn: kapi_run
+GAME_SHORT_NAME = os.environ["GAME_SHORT_NAME"]                  # örn: kapi_run
 PUBLIC_GAME_URL = os.environ["PUBLIC_GAME_URL"].rstrip("/") + "/"  # oyunun kök URL'i
 SECRET          = os.environ.get("SECRET", "change-me")
-DATABASE_URL    = os.environ["DATABASE_URL"]                    # postgresql+asyncpg://...
+DATABASE_URL    = os.environ["DATABASE_URL"]                     # postgresql+asyncpg://...
 
 # --- DB setup ---
 Base = declarative_base()
@@ -179,7 +182,6 @@ async def get_leaderboard(limit: int = 200):
             select(Score).order_by(desc(Score.score)).limit(limit)
         )
         rows = result.scalars().all()
-
     return [
         {"user_id": r.user_id, "username": r.username, "score": r.score}
         for r in rows
@@ -193,3 +195,9 @@ def health_root():
 @app.get("/api/health")
 def health_api():
     return PlainTextResponse("OK from /api/health")
+
+# --- Static files (OYUN DOSYALARI) ---
+# Projenin kök dizinini statik olarak sunar: index.html, scripts/, images/, media/ vs.
+# /api/... ve /bot/... rotaları aynen çalışmaya devam eder.
+STATIC_DIR = os.path.dirname(os.path.abspath(__file__))
+app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
